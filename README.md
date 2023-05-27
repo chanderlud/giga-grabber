@@ -1,5 +1,5 @@
 # Giga Grabber
-A very fast and stable [Mega](https://mega.nz) downloader build using a modified version of [mega-rs](https://github.com/Hirevo/mega-rs).
+A very fast and stable [Mega](https://mega.nz) downloader built using a modified version of [mega-rs](https://github.com/Hirevo/mega-rs).
 It supports multiple concurrent downloads and multiple threads per download. It can resume incomplete downloads even in the event of a crash.
 
 # Usage
