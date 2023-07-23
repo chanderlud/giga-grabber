@@ -18,6 +18,7 @@ use futures::FutureExt;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::spawn_blocking;
 use tokio::time::sleep;
 use url::Url;
 
@@ -744,7 +745,7 @@ impl Client {
 
         let mut bodies = stream::iter(urls)
             .map(|(start, url)| {
-                let ctr = ctr.clone();
+                let mut ctr = ctr.clone();
                 let download = &download;
 
                 async move {
@@ -839,9 +840,13 @@ impl Client {
                                 match read_result {
                                     // successful read
                                     Ok(mut buffer) => {
-                                        let mut updated_ctr = ctr.clone();
-                                        updated_ctr.seek(start as u64);
-                                        updated_ctr.apply_keystream(&mut buffer);
+                                        ctr.seek(start as u64); // seek to start of section
+
+                                        // perform decryption in a blocking thread
+                                        let buffer = spawn_blocking(move || {
+                                            ctr.apply_keystream(&mut buffer); // decrypt
+                                            buffer // return buffer
+                                        }).await?;
 
                                         break Ok::<_, _>((start, buffer));
                                     }

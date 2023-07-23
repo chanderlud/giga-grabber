@@ -63,6 +63,8 @@ pub enum Error {
     Bincode(#[from] bincode::Error),
     #[error("Out of bandwidth error")]
     OutOfBandwidth,
+    #[error("Join error")]
+    JoinError(#[from] tokio::task::JoinError),
     /// Other errors.
     #[error("unknown error: {0}")]
     Other(Box<dyn std::error::Error + Send + Sync>),
