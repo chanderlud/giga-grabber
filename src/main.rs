@@ -166,8 +166,8 @@ impl Download {
 
         if let Some(start) = self.start.blocking_read().as_ref() {
             let elapsed = start.elapsed().as_secs_f32(); // elapsed time in seconds
-            // convert to MB/s
             (self.downloaded.load(Ordering::Relaxed) as f32 / elapsed) / 1048576_f32
+        // convert to MB/s
         } else {
             0_f32
         }

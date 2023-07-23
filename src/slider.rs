@@ -1,6 +1,5 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::too_many_arguments)]
-
 // a slightly modified version of the normal iced slider
 // corrects a rendering issue with the rail
 
