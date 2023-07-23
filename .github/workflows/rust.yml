@@ -40,17 +40,19 @@ jobs:
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
+      env:
+        MATRIX_OS: ${{ matrix.os }}
       run: |
         cargo build --release
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          mv target/release/giga_grabber.exe target/release/giga_grabber_${{ matrix.os }}.exe
+        if [[ "$MATRIX_OS" == "windows-latest" ]]; then
+          mv target/release/giga_grabber.exe target/release/giga_grabber_$MATRIX_OS.exe
         else
-          mv target/release/giga_grabber target/release/giga_grabber_${{ matrix.os }}
+          mv target/release/giga_grabber target/release/giga_grabber_$MATRIX_OS
         fi
 
     - name: Upload Release
-      if: startsWith(github.ref, 'refs/tags/')
       uses: actions/upload-artifact@v2
       with:
-        name: giga_grabber_${{ matrix.os }}
-        path: target/release/giga_grabber_${{ matrix.os }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+        name: your_app_name_${{ matrix.os }}
+        path: target/release/your_app_name_${{ matrix.os }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+
