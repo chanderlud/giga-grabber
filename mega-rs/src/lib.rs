@@ -14,8 +14,10 @@ use cipher::{BlockDecryptMut, BlockEncrypt, BlockEncryptMut, KeyInit, KeyIvInit,
 use cipher::generic_array::GenericArray;
 use cipher::StreamCipherSeek;
 use futures::{AsyncSeek, AsyncSeekExt, stream, StreamExt};
+use futures::FutureExt;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::select;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 use url::Url;
 
@@ -33,11 +35,23 @@ mod http;
 mod utils;
 mod metadata;
 
-pub const MIN_SECTION_SIZE: usize = 1024 * 1024;
 // 1 MB
-pub const MAX_SECTION_SIZE: usize = 1024 * 1024 * 128;
-// 128 MB
+pub(crate) const MIN_SECTION_SIZE: usize = 1024 * 1024;
+// 12 MB
+pub(crate) const MAX_SECTION_SIZE: usize = 1024 * 1024 * 12;
 pub(crate) const DEFAULT_API_ORIGIN: &str = "https://g.api.mega.co.nz/";
+
+pub trait Download {
+    fn get_node(&self) -> &Node;
+
+    fn add_downloaded(&self, size: usize);
+
+    fn get_pause(&self) -> bool;
+
+    fn set_paused(&self, paused: bool);
+
+    fn set_pause(&self, paused: bool);
+}
 
 /// A builder to initialize a [`Client`] instance.
 pub struct ClientBuilder {
@@ -56,6 +70,7 @@ pub struct ClientBuilder {
     /// Using plain HTTP for file transfers is fine because the file contents are already encrypted,
     /// making protocol-level encryption a bit redundant and potentially slowing down the transfer.
     https: bool,
+    sender: Option<Arc<UnboundedSender<Error>>>,
 }
 
 impl ClientBuilder {
@@ -68,7 +83,13 @@ impl ClientBuilder {
             max_retry_delay: Duration::from_secs(5),
             timeout: Some(Duration::from_secs(10)),
             https: false,
+            sender: None,
         }
+    }
+
+    pub fn sender(mut self, writer: Arc<UnboundedSender<Error>>) -> Self {
+        self.sender = Some(writer);
+        self
     }
 
     /// Sets the API's origin.
@@ -108,7 +129,7 @@ impl ClientBuilder {
     }
 
     /// Builds a [`Client`] instance with the current settings and the specified HTTP client.
-    pub fn build<T: HttpClient + 'static>(self, client: T) -> Result<Client> {
+    pub fn build<T: HttpClient + 'static + Send + Sync>(self, client: T) -> Result<Client> {
         let state = ClientState {
             origin: self.origin,
             max_retries: self.max_retries,
@@ -116,13 +137,14 @@ impl ClientBuilder {
             max_retry_delay: self.max_retry_delay,
             timeout: self.timeout,
             https: self.https,
-            id_counter: AtomicU64::new(0),
+            id_counter: AtomicU64::new(0).into(),
             session: None,
         };
 
         Ok(Client {
             state,
-            client: Box::new(client),
+            client: Arc::new(client),
+            sender: self.sender.unwrap(),
         })
     }
 }
@@ -138,7 +160,18 @@ pub struct Client {
     /// The client's state.
     pub(crate) state: ClientState,
     /// The HTTP client.
-    pub(crate) client: Box<dyn HttpClient>,
+    pub(crate) client: Arc<dyn HttpClient + Send + Sync>,
+    pub sender: Arc<UnboundedSender<Error>>,
+}
+
+impl Clone for Client {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            client: Arc::clone(&self.client),
+            sender: Arc::clone(&self.sender),
+        }
+    }
 }
 
 impl Client {
@@ -629,23 +662,24 @@ impl Client {
     }
 
     /// Downloads a file, identified by its hash, into the given writer.
-    pub async fn download_node<W: AsyncWrite>(&self, node: &Node, writer: W, threads: usize, metadata_path: &PathBuf) -> Result<()>
+    pub async fn download_node<W: AsyncWrite, D: Download>(&self, download: D, mut writer: W, threads: usize, metadata_path: &PathBuf) -> Result<()>
         where
             W: AsyncWrite + AsyncSeek + Unpin,
+            D: Download,
     {
-        let responses = if let Some(download_id) = node.download_id() {
-            let request = if node.hash.as_str() == download_id {
+        let responses = if let Some(download_id) = download.get_node().download_id() {
+            let request = if download.get_node().hash.as_str() == download_id {
                 Request::Download {
                     g: 1,
                     ssl: if self.state.https { 2 } else { 0 },
                     n: None,
-                    p: Some(node.hash.clone()),
+                    p: Some(download.get_node().hash.clone()),
                 }
             } else {
                 Request::Download {
                     g: 1,
                     ssl: if self.state.https { 2 } else { 0 },
-                    n: Some(node.hash.clone()),
+                    n: Some(download.get_node().hash.clone()),
                     p: None,
                 }
             };
@@ -658,7 +692,7 @@ impl Client {
                 g: 1,
                 ssl: if self.state.https { 2 } else { 0 },
                 p: None,
-                n: Some(node.hash.clone()),
+                n: Some(download.get_node().hash.clone()),
             };
 
             self.send_requests(&[request]).await?
@@ -674,17 +708,17 @@ impl Client {
             }
         };
 
-        let mut file_key = node.key.clone();
+        let mut file_key = download.get_node().key.clone();
         utils::unmerge_key_mac(&mut file_key);
-
-        let mut section_size = response.size as usize / threads;
 
         let mut file_iv = [0u8; 16];
 
-        file_iv[..8].copy_from_slice(&node.key[16..24]);
+        file_iv[..8].copy_from_slice(&download.get_node().key[16..24]);
         let ctr = ctr::Ctr128BE::<Aes128>::new(file_key[..16].into(), (&file_iv).into());
 
-        file_iv[8..].copy_from_slice(&node.key[16..24]);
+        file_iv[8..].copy_from_slice(&download.get_node().key[16..24]);
+
+        let mut section_size = response.size as usize / threads;
 
         if section_size < MIN_SECTION_SIZE {
             section_size = MIN_SECTION_SIZE;
@@ -695,75 +729,151 @@ impl Client {
         }
 
         let mut sections = generate_sections(response.size as usize, section_size);
-        let metadata = MetaData::new(&sections, metadata_path).await?;
+        let mut metadata = MetaData::new(&sections, metadata_path).await?;
 
         if metadata_path.exists() {
-            let completed_sections = metadata.incomplete_sections();
-            sections = sections.iter().filter(|(start, _end)| completed_sections.contains(start)).cloned().collect();
+            let incomplete_sections = metadata.incomplete_sections();
+
+            sections = sections
+                .into_iter()
+                .filter(|(start, _end)| incomplete_sections.contains(start))
+                .collect();
         }
 
         let urls = generate_section_urls(&response.download_url, &sections);
-        let shared_writer = Arc::new(Mutex::new(writer));
-        let shared_metadata = Arc::new(Mutex::new(metadata));
 
-        let bodies = stream::iter(urls)
+        let mut bodies = stream::iter(urls)
             .map(|(start, url)| {
                 let ctr = ctr.clone();
+                let download = &download;
 
                 async move {
-                    let mut retries = 0;
+                    let mut request_retries = 0;
+                    let mut request_error_delay = self.state.min_retry_delay;
 
                     loop {
+                        // pause download if max retries reached
+                        if request_retries >= self.state.max_retries {
+                            // only pause if the download is not already paused
+                            if !download.get_pause() {
+                                download.set_pause(true); // make the UI aware that the download is paused
+                                download.set_paused(true); // the download is paused
+                                self.sender.send(Error::OutOfBandwidth).unwrap();
+                            }
+
+                            // wait for unpause
+                            while download.get_pause() {
+                                sleep(Duration::from_millis(100)).await;
+                            }
+
+                            download.set_paused(false); // no longer paused
+                            request_retries = 0; // reset request retries
+                            request_error_delay = self.state.min_retry_delay; // reset request error delay
+                        }
+
+                        // request chunk of mega file
                         match self.client.get(url.clone()).await {
                             Ok(mut reader) => {
-                                let mut buffer = Vec::with_capacity(section_size);
-                                retries = 0;
+                                let mut buffer = Vec::with_capacity(section_size); // allocate buffer for chunk
+                                let mut reader_retries = 0; // number of read retries
+                                let mut read_error_delay = self.state.min_retry_delay;
 
-                                let result = loop {
-                                    match reader.read_to_end(&mut buffer).await {
-                                        Ok(_) => {
-                                            if buffer.len() == 0 {
-                                                break Err(Error::InvalidResponseFormat)
-                                            } else {
-                                                break Ok(buffer)
-                                            }
+                                let read_result = loop {
+                                    let cancelable = async {
+                                        while !download.get_pause() {
+                                            sleep(Duration::from_millis(100)).await;
+                                        }
+                                    };
 
-                                        }
-                                        Err(e) => {
-                                            if retries < self.state.max_retries {
-                                                retries += 1;
-                                                sleep(self.state.max_retry_delay).await;
-                                            } else {
-                                                break Err(Error::IoError(e))
+                                    let mut read = Option::<std::io::Result<usize>>::None; // result of the read
+
+                                    select! {
+                                        value = reader.read_to_end(&mut buffer) => {
+                                            read = Some(value);
+                                        },
+                                        _ = cancelable.fuse() => {},
+                                    }
+
+                                    if let Some(read) = read {
+                                        match read {
+                                            Ok(read) => {
+                                                if read == 0 {
+                                                    break Err(Error::InvalidResponseFormat);
+                                                } else {
+                                                    break Ok(buffer);
+                                                }
+                                            }
+                                            // handle read errors
+                                            Err(error) => {
+                                                if reader_retries < self.state.max_retries {
+                                                    reader_retries += 1;
+                                                    sleep(read_error_delay).await;
+                                                    read_error_delay *= 2;
+
+                                                    if read_error_delay > self.state.max_retry_delay {
+                                                        read_error_delay = self.state.max_retry_delay;
+                                                    }
+                                                } else {
+                                                    break Err(Error::IoError(error)); // cancel read
+                                                }
                                             }
                                         }
+                                    } else {
+                                        // if `read` is None the future was canceled
+                                        // so the download was paused
+                                        download.set_paused(true); // the download is paused
+
+                                        // wait for unpause
+                                        while download.get_pause() {
+                                            sleep(Duration::from_millis(100)).await;
+                                        }
+
+                                        download.set_paused(false);
+
+                                        request_retries = 0; // reset request retries
+                                        request_error_delay = self.state.min_retry_delay; // reset request error delay
+                                        break Err(Error::RunnerPaused); // a new reader will be required
                                     }
                                 };
 
-                                match result {
+                                match read_result {
+                                    // successful read
                                     Ok(mut buffer) => {
                                         let mut updated_ctr = ctr.clone();
                                         updated_ctr.seek(start as u64);
                                         updated_ctr.apply_keystream(&mut buffer);
 
-                                        return Ok::<_, Error>((start, buffer))
+                                        break Ok::<_, _>((start, buffer));
                                     }
-                                    Err(_e) => {
-                                        if retries < self.state.max_retries {
-                                            retries += 1;
-                                            sleep(self.state.max_retry_delay).await;
-                                        } else {
-                                            return Err(Error::MaxRetriesReached)
+                                    // handle reader errors
+                                    Err(error) => {
+                                        match &error {
+                                            Error::RunnerPaused => continue,
+                                            _ => {
+                                                self.sender.send(error).unwrap();
+
+                                                if request_retries < self.state.max_retries {
+                                                    request_retries += 1;
+                                                    sleep(request_error_delay).await;
+                                                    request_error_delay *= 2;
+
+                                                    if request_error_delay > self.state.max_retry_delay {
+                                                        request_error_delay = self.state.max_retry_delay;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
-                            Err(_e) => {
-                                if retries < self.state.max_retries {
-                                    retries += 1;
-                                    sleep(self.state.max_retry_delay).await;
-                                } else {
-                                    return Err(Error::MaxRetriesReached)
+                            // handle request errors
+                            Err(error) => {
+                                self.sender.send(error).unwrap();
+                                request_retries += 1;
+                                sleep(request_error_delay).await;
+                                request_error_delay *= 2;
+                                if request_error_delay > self.state.max_retry_delay {
+                                    request_error_delay = self.state.max_retry_delay;
                                 }
                             }
                         }
@@ -772,19 +882,40 @@ impl Client {
             })
             .buffer_unordered(threads);
 
-        bodies.for_each(|buffer| async {
-            let (start, data) = buffer.unwrap();
-            let mut writer = shared_writer.lock().await;
+        let mut errors = Vec::new();
 
-            writer.flush().await.unwrap();
-            let _ = writer.seek(SeekFrom::Start(start as u64)).await.unwrap();
-            let _ = writer.write_all(&data).await.unwrap();
+        while let Some(body) = bodies.next().await {
+            match body {
+                Ok((start, data)) => {
+                    // flush writer
+                    if let Err(error) = writer.flush().await {
+                        errors.push(Error::IoError(error));
+                        continue;
+                    }
 
-            let mut metadata = shared_metadata.lock().await;
-            metadata.complete(start).await.unwrap();
-        }).await;
+                    // seek to start of section
+                    if let Err(error) = writer.seek(SeekFrom::Start(start as u64)).await {
+                        errors.push(Error::IoError(error));
+                        continue;
+                    }
 
-        Ok(())
+                    if let Err(error) = writer.write_all(&data).await {
+                        errors.push(Error::IoError(error));
+                        continue;
+                    }
+
+                    download.add_downloaded(data.len()); // update download progress
+                    metadata.complete(start).await.unwrap(); // mark section as complete
+                }
+                Err(error) => errors.push(error)
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(()) // no errors occurred while executing futures
+        } else {
+            Err(Error::RunnerError(errors)) // errors occurred
+        }
     }
 
     /// Uploads a file within a parent folder.
@@ -1507,24 +1638,22 @@ pub(crate) enum AttributeKind {
 }
 
 fn generate_section_urls(base_url: &str, sections: &Vec<(usize, usize)>) -> Vec<(usize, Url)> {
-    let mut urls = Vec::new();
-
-    for (start, end) in sections {
-        let url_string = format!("{}/{}-{}", base_url, start, end);
-        urls.push((*start, Url::parse(&url_string).unwrap()));
-    }
-
-    urls
+    sections
+        .into_iter()
+        .map(|(start, end)| {
+            let url_string = format!("{}/{}-{}", base_url, start, end);
+            (*start, Url::parse(&url_string).unwrap())
+        })
+        .collect()
 }
 
 fn generate_sections(file_size: usize, section_size: usize) -> Vec<(usize, usize)> {
-    let mut sections = Vec::new();
-
-    for i in (0..file_size).step_by(section_size) {
-        let start = i;
-        let end = std::cmp::min(start + section_size - 1, file_size - 1);
-        sections.push((start, end));
-    }
-
-    sections
+    (0..file_size)
+        .step_by(section_size)
+        .map(|i| {
+            let start = i;
+            let end = std::cmp::min(start + section_size - 1, file_size - 1);
+            (start, end)
+        })
+        .collect()
 }

@@ -1,0 +1,16 @@
+# macOS hidden metadata file
+.DS_Store
+
+# Backup files from some editors
+**/*.rs.bk
+
+# Rust compilation folder
+/target
+
+# hidden folders from code editors
+/.vscode
+/.nova
+/.idea
+
+# ignored folder, used for testing purposes
+/ignored

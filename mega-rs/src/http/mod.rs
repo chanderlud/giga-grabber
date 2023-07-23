@@ -1,10 +1,12 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::io::AsyncRead;
 use url::Url;
+use dyn_clone::DynClone;
 
 use crate::commands::{Request, Response};
 use crate::error::Error;
@@ -22,7 +24,7 @@ pub struct UserSession {
 }
 
 /// Stores the data representing the client's state.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClientState {
     /// The API's origin.
     pub(crate) origin: Url,
@@ -40,13 +42,13 @@ pub struct ClientState {
     /// making protocol-level encryption a bit redundant and potentially slowing down the transfer.
     pub(crate) https: bool,
     /// The request counter, for idempotency.
-    pub(crate) id_counter: AtomicU64,
+    pub(crate) id_counter: Arc<AtomicU64>,
     /// The user's session.
     pub(crate) session: Option<UserSession>,
 }
 
 #[async_trait]
-pub trait HttpClient {
+pub trait HttpClient: DynClone {
     /// Sends the given requests to MEGA's API and parses the responses accordingly.
     async fn send_requests(
         &self,
@@ -56,7 +58,7 @@ pub trait HttpClient {
     ) -> Result<Vec<Response>, Error>;
 
     /// Initiates a simple GET request, returning the response body as a reader.
-    async fn get(&self, url: Url) -> Result<Pin<Box<dyn AsyncRead>>, Error>;
+    async fn get(&self, url: Url) -> Result<Pin<Box<dyn AsyncRead + Send>>, Error>;
 
     /// Initiates a simple POST request, with body and optional `content-length`, returning the response body as a reader.
     async fn post(

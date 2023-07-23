@@ -16,6 +16,12 @@ pub enum Error {
     /// Unknown user login version.
     #[error("unknown user login version: {0}")]
     UnknownUserLoginVersion(i32),
+    #[error("runner error: {:?}", .0)]
+    RunnerError(Vec<Error>),
+    #[error("runner paused")]
+    RunnerPaused,
+    #[error("no proxies available")]
+    NoProxies,
     /// Failed MAC verification.
     #[error("failed MAC verification")]
     MacMismatch,
@@ -53,6 +59,10 @@ pub enum Error {
     /// I/O error.
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Bincode error: {0}")]
+    Bincode(#[from] bincode::Error),
+    #[error("Out of bandwidth error")]
+    OutOfBandwidth,
     /// Other errors.
     #[error("unknown error: {0}")]
     Other(Box<dyn std::error::Error + Send + Sync>),

@@ -20,7 +20,7 @@ base64 = "0.21.0"
 
 # Async helpers
 async-trait = "0.1.64"
-futures = "0.3.26"
+futures = "0.3.28"
 sluice = "0.5.5"
 
 # Error handling
@@ -30,6 +30,7 @@ thiserror = "1.0.38"
 url = "2.3.1"
 rand = "0.8.5"
 chrono = "0.4.23"
+dyn-clone = "1.0.11"
 
 # Cryptography
 aes = "0.8.2"
