@@ -1745,7 +1745,12 @@ pub(crate) fn settings() -> Settings<Config> {
             transparent: false,
             always_on_top: false,
             icon: None, // Some(from_rgba(icon.to_rgba8().into_raw(), 32, 32).unwrap()),
+            #[cfg(target_os = "macos")]
             platform_specific: PlatformSpecific::default(),
+            #[cfg(target_os = "windows")]
+            platform_specific: PlatformSpecific::default(),
+            #[cfg(target_os = "linux")]
+            platform_specific: PlatformSpecific,
         },
         flags: Config::load().expect("failed to load config"), // load config
         default_font: Some(include_bytes!("../assets/Cabin/static/Cabin-Regular.ttf")),
