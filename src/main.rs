@@ -1,33 +1,33 @@
 use std::fmt::Display;
 use std::fs::rename;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use deadqueue::unlimited::Queue;
 use futures::AsyncWriteExt;
+use futures::FutureExt;
 use iced::Application;
 use mega::{Client, Node, Nodes};
 use serde::{Deserialize, Serialize};
-use futures::FutureExt;
-use tokio::fs::{create_dir_all, File, OpenOptions, remove_file};
-use tokio::{select, spawn};
+use tokio::fs::{create_dir_all, remove_file, File, OpenOptions};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep};
+use tokio::time::{sleep, Instant};
+use tokio::{select, spawn};
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
-use crate::app::{App, settings};
+use crate::app::{settings, App};
 use crate::config::Config;
 
 mod app;
 mod config;
-mod styles;
 mod loading_wheel;
 mod modal;
 mod slider;
+mod styles;
 
 type DownloadQueue = Arc<Queue<Download>>;
 
@@ -44,22 +44,20 @@ enum ProxyMode {
 }
 
 impl ProxyMode {
-    pub const ALL: [Self; 3] = [
-        Self::None,
-        Self::Single,
-        Self::Random,
-    ];
+    pub const ALL: [Self; 3] = [Self::None, Self::Single, Self::Random];
 }
 
 // implement display for proxy mode dropdown
 impl Display for ProxyMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}",
-               match self {
-                   Self::None => "No Proxy",
-                   Self::Single => "Single Proxy",
-                   Self::Random => "Proxy List",
-               }
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::None => "No Proxy",
+                Self::Single => "Single Proxy",
+                Self::Random => "Proxy List",
+            }
         )
     }
 }
@@ -86,9 +84,7 @@ impl MegaFile {
     }
 
     fn iter(&self) -> FileIter {
-        FileIter {
-            stack: vec![self],
-        }
+        FileIter { stack: vec![self] }
     }
 }
 
@@ -170,7 +166,8 @@ impl Download {
 
         if let Some(start) = self.start.blocking_read().as_ref() {
             let elapsed = start.elapsed().as_secs_f32(); // elapsed time in seconds
-            (self.downloaded.load(Ordering::Relaxed) as f32 / elapsed) / 1048576_f32 // convert to MB/s
+            // convert to MB/s
+            (self.downloaded.load(Ordering::Relaxed) as f32 / elapsed) / 1048576_f32
         } else {
             0_f32
         }
@@ -207,7 +204,13 @@ fn main() -> iced::Result {
 }
 
 // background thread that downloads files
-async fn runner(config: Config, mega: Client, queue: DownloadQueue, sender: Arc<UnboundedSender<RunnerMessage>>, queued: Arc<AtomicUsize>) {
+async fn runner(
+    config: Config,
+    mega: Client,
+    queue: DownloadQueue,
+    sender: Arc<UnboundedSender<RunnerMessage>>,
+    queued: Arc<AtomicUsize>,
+) {
     let active_threads = Arc::new(AtomicUsize::new(0)); // number of active threads
 
     // create workers, `max_concurrent_files` = number of workers
@@ -230,12 +233,16 @@ async fn runner(config: Config, mega: Client, queue: DownloadQueue, sender: Arc<
                     } else {
                         // min of 1, max of `max_threads_per_file` or `download.node.size() / 524288`
                         1.max(
-                            config.max_threads_per_file.min(download.node.size() as usize / 524288)
+                            config
+                                .max_threads_per_file
+                                .min(download.node.size() as usize / 524288),
                         )
                     };
 
                     // wait until there are enough threads available
-                    while (active_threads.load(Ordering::Relaxed) + download_threads) > config.max_threads {
+                    while (active_threads.load(Ordering::Relaxed) + download_threads)
+                        > config.max_threads
+                    {
                         sleep(Duration::from_millis(10)).await;
                     }
 
@@ -244,20 +251,19 @@ async fn runner(config: Config, mega: Client, queue: DownloadQueue, sender: Arc<
 
                     // send message to GUI that download has started
                     // `Download` has internal Arcs so it can be cloned for the GUI to access stats
-                    sender.send(
-                        RunnerMessage::Start(download.clone())
-                    ).unwrap();
+                    sender.send(RunnerMessage::Start(download.clone())).unwrap();
 
                     if let Err(error) = download_file(&download, &mega, download_threads).await {
                         mega.sender.send(error).unwrap(); // send error to GUI
                     }
 
                     // send message to GUI that download has finished
-                    sender.send(
-                        RunnerMessage::Stop(download.node.hash().to_string())
-                    ).unwrap();
+                    sender
+                        .send(RunnerMessage::Stop(download.node.hash().to_string()))
+                        .unwrap();
 
-                    active_threads.fetch_sub(download_threads, Ordering::Relaxed); // release threads
+                    active_threads.fetch_sub(download_threads, Ordering::Relaxed);
+                    // release threads
                 }
             })
         })
@@ -271,7 +277,11 @@ async fn runner(config: Config, mega: Client, queue: DownloadQueue, sender: Arc<
 
 // get the files from a mega folder
 // `index` is used by the GUI to keep track of the url inputs
-async fn get_files(mega: Client, url: String, index: usize) -> Result<(Vec<MegaFile>, usize), usize> {
+async fn get_files(
+    mega: Client,
+    url: String,
+    index: usize,
+) -> Result<(Vec<MegaFile>, usize), usize> {
     let nodes = mega.fetch_public_nodes(&url).await.map_err(|_e| index)?; // get all nodes
 
     // build a file structure for each root node

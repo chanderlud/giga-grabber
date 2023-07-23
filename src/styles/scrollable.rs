@@ -1,6 +1,6 @@
-use iced::{Color, Theme};
 use iced::widget::scrollable;
 use iced::widget::scrollable::{Scrollbar, Scroller};
+use iced::{Color, Theme};
 
 pub(crate) struct Scrollable;
 
@@ -14,7 +14,7 @@ impl scrollable::StyleSheet for Scrollable {
             border_width: 0.0,
             border_color: Default::default(),
             scroller: Scroller {
-                color: Color::from_rgb8(62, 62, 62).into(),
+                color: Color::from_rgb8(62, 62, 62),
                 border_radius: 4.0,
                 border_width: 0.0,
                 border_color: Default::default(),
@@ -29,7 +29,7 @@ impl scrollable::StyleSheet for Scrollable {
             border_width: 0.0,
             border_color: Default::default(),
             scroller: Scroller {
-                color: Color::from_rgb8(82, 82, 82).into(),
+                color: Color::from_rgb8(82, 82, 82),
                 border_radius: 4.0,
                 border_width: 0.0,
                 border_color: Default::default(),

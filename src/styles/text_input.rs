@@ -1,11 +1,11 @@
-use iced::{Color, Theme};
 use iced::widget::text_input;
 use iced::widget::text_input::Appearance;
+use iced::{Color, Theme};
 
 use crate::app::UrlStatus;
 
 pub(crate) struct UrlInput {
-    pub(crate) mode: UrlStatus
+    pub(crate) mode: UrlStatus,
 }
 
 impl text_input::StyleSheet for UrlInput {
@@ -17,23 +17,23 @@ impl text_input::StyleSheet for UrlInput {
             border_radius: 4.0,
             border_width: 2.0,
             border_color: match self.mode {
-                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0).into(),
-                _ => Color::from_rgb8(46, 46, 46).into()
+                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0),
+                _ => Color::from_rgb8(46, 46, 46),
             },
-            icon_color: Default::default()
+            icon_color: Default::default(),
         }
     }
 
     fn focused(&self, _style: &Self::Style) -> Appearance {
         Appearance {
-            background: Color::from_rgb8(34, 34 , 34).into(),
+            background: Color::from_rgb8(34, 34, 34).into(),
             border_radius: 4.0,
             border_width: 2.0,
             border_color: match self.mode {
-                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0).into(),
-                _ => Color::from_rgb8(42, 42, 42).into()
+                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0),
+                _ => Color::from_rgb8(42, 42, 42),
             },
-            icon_color: Default::default()
+            icon_color: Default::default(),
         }
     }
 
@@ -55,14 +55,14 @@ impl text_input::StyleSheet for UrlInput {
 
     fn disabled(&self, _style: &Self::Style) -> Appearance {
         Appearance {
-            background: Color::from_rgb8(38, 38 , 38).into(),
+            background: Color::from_rgb8(38, 38, 38).into(),
             border_radius: 4.0,
             border_width: 2.0,
             border_color: match self.mode {
-                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0).into(),
-                _ => Color::from_rgb8(42, 42 , 42).into(),
+                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0),
+                _ => Color::from_rgb8(42, 42, 42),
             },
-            icon_color: Default::default()
+            icon_color: Default::default(),
         }
     }
 }

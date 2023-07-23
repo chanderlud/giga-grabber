@@ -1,9 +1,9 @@
-use iced::{Color, Theme};
 use iced::widget::button;
 use iced::widget::button::Appearance;
+use iced::{Color, Theme};
 
 pub(crate) struct Nav {
-    pub(crate) active: bool
+    pub(crate) active: bool,
 }
 
 impl button::StyleSheet for Nav {
@@ -13,14 +13,14 @@ impl button::StyleSheet for Nav {
         Appearance {
             shadow_offset: Default::default(),
             background: if self.active {
-                Color::from_rgb8(76, 76 , 76).into()
+                Color::from_rgb8(76, 76, 76).into()
             } else {
                 Color::TRANSPARENT.into()
             },
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255 , 255).into(),
+            text_color: Color::from_rgb8(255, 255, 255),
         }
     }
 
@@ -28,14 +28,14 @@ impl button::StyleSheet for Nav {
         Appearance {
             shadow_offset: Default::default(),
             background: if self.active {
-                Color::from_rgb8(66, 66 , 66).into()
+                Color::from_rgb8(66, 66, 66).into()
             } else {
-                Color::from_rgb8(76, 76 , 76).into()
+                Color::from_rgb8(76, 76, 76).into()
             },
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255 , 255).into(),
+            text_color: Color::from_rgb8(255, 255, 255),
         }
     }
 
@@ -46,7 +46,7 @@ impl button::StyleSheet for Nav {
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(180, 180 , 180).into(),
+            text_color: Color::from_rgb8(180, 180, 180),
         }
     }
 }
@@ -59,22 +59,22 @@ impl button::StyleSheet for Button {
     fn active(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             shadow_offset: Default::default(),
-            background: Color::from_rgb8(53,0,211).into(),
+            background: Color::from_rgb8(53, 0, 211).into(),
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255 , 255).into(),
+            text_color: Color::from_rgb8(255, 255, 255),
         }
     }
 
     fn hovered(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             shadow_offset: Default::default(),
-            background: Color::from_rgb8(73,0,231).into(),
+            background: Color::from_rgb8(73, 0, 231).into(),
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255 , 255).into(),
+            text_color: Color::from_rgb8(255, 255, 255),
         }
     }
 }
@@ -91,7 +91,7 @@ impl button::StyleSheet for WarningButton {
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255 , 255).into(),
+            text_color: Color::from_rgb8(255, 255, 255),
         }
     }
 
@@ -102,7 +102,7 @@ impl button::StyleSheet for WarningButton {
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255 , 255).into(),
+            text_color: Color::from_rgb8(255, 255, 255),
         }
     }
 }

@@ -1,6 +1,6 @@
-use iced::{Color, Point, Rectangle, Theme, Vector};
-use iced::widget::canvas::{Fill, Frame};
 use iced::widget::canvas::{Cursor, Geometry, Path, Program};
+use iced::widget::canvas::{Fill, Frame};
+use iced::{Color, Point, Rectangle, Theme, Vector};
 
 use crate::app::Message;
 
@@ -60,7 +60,13 @@ impl LoadingWheel {
 impl Program<Message> for LoadingWheel {
     type State = ();
 
-    fn draw(&self, _state: &(), _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry> {
+    fn draw(
+        &self,
+        _state: &(),
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
         let mut frame = Frame::new(bounds.size()); // create a new frame with the size of the bounds
         let center = Point::new(bounds.width / 2.0, bounds.height / 2.0); // get the center of the bounds
         let (sin, cos) = self.angle.sin_cos(); // get the sin and cos of the angle
@@ -68,9 +74,18 @@ impl Program<Message> for LoadingWheel {
         // rotate the circles
         for circle in &self.circles {
             // create an offset vector for the circle
-            let offset = Vector::new(circle.position.x * cos - circle.position.y * sin + center.x, circle.position.x * sin + circle.position.y * cos + center.y);
+            let offset = Vector::new(
+                circle.position.x * cos - circle.position.y * sin + center.x,
+                circle.position.x * sin + circle.position.y * cos + center.y,
+            );
             // create a circle path at the offset location
-            let path = Path::circle(Point { x: offset.x, y: offset.y }, circle.radius);
+            let path = Path::circle(
+                Point {
+                    x: offset.x,
+                    y: offset.y,
+                },
+                circle.radius,
+            );
             // fill the path with a color
             frame.fill(&path, Fill::from(Color::from_rgb8(53, 0, 211)));
         }

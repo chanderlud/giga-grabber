@@ -5,8 +5,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ProxyMode;
 use crate::app::Theme;
+use crate::ProxyMode;
 
 type Result<T> = std::result::Result<T, Error>;
 

@@ -1,15 +1,21 @@
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::too_many_arguments)]
+
 // a slightly modified version of the normal iced slider
 // corrects a rendering issue with the rail
 
 //! Display an interactive selector of a single value from a range of values.
 //!
 //! A [`Slider`] has some local [`State`].
-use std::ops::RangeInclusive;
 use iced::Color;
-use iced_native::{Clipboard, Element, Event, event, layout, Layout, Length, mouse, Pixels, Point, Rectangle, renderer, Shell, Size, touch, Widget};
 use iced_native::renderer::BorderRadius;
 use iced_native::widget::slider::{HandleShape, StyleSheet};
 use iced_native::widget::{tree, Tree};
+use iced_native::{
+    event, layout, mouse, renderer, touch, Clipboard, Element, Event, Layout, Length, Pixels,
+    Point, Rectangle, Shell, Size, Widget,
+};
+use std::ops::RangeInclusive;
 
 /// An horizontal bar and a handle that selects a single value from a range of
 /// values.
@@ -39,9 +45,9 @@ use iced_native::widget::{tree, Tree};
 /// ![Slider drawn by Coffee's renderer](https://github.com/hecrj/coffee/blob/bda9818f823dfcb8a7ad0ff4940b4d4b387b5208/images/ui/slider.png?raw=true)
 #[allow(missing_debug_implementations)]
 pub struct Slider<'a, T, Message, Renderer>
-    where
-        Renderer: iced_native::Renderer,
-        Renderer::Theme: StyleSheet,
+where
+    Renderer: iced_native::Renderer,
+    Renderer::Theme: StyleSheet,
 {
     range: RangeInclusive<T>,
     step: T,
@@ -54,11 +60,11 @@ pub struct Slider<'a, T, Message, Renderer>
 }
 
 impl<'a, T, Message, Renderer> Slider<'a, T, Message, Renderer>
-    where
-        T: Copy + From<u8> + PartialOrd,
-        Message: Clone,
-        Renderer: iced_native::Renderer,
-        Renderer::Theme: StyleSheet,
+where
+    T: Copy + From<u8> + PartialOrd,
+    Message: Clone,
+    Renderer: iced_native::Renderer,
+    Renderer::Theme: StyleSheet,
 {
     /// The default height of a [`Slider`].
     pub const DEFAULT_HEIGHT: f32 = 22.0;
@@ -72,8 +78,8 @@ impl<'a, T, Message, Renderer> Slider<'a, T, Message, Renderer>
     ///   It receives the new value of the [`Slider`] and must produce a
     ///   `Message`.
     pub fn new<F>(range: RangeInclusive<T>, value: T, on_change: F) -> Self
-        where
-            F: 'a + Fn(T) -> Message,
+    where
+        F: 'a + Fn(T) -> Message,
     {
         let value = if value >= *range.start() {
             value
@@ -123,10 +129,7 @@ impl<'a, T, Message, Renderer> Slider<'a, T, Message, Renderer>
     }
 
     /// Sets the style of the [`Slider`].
-    pub fn style(
-        mut self,
-        style: impl Into<<Renderer::Theme as StyleSheet>::Style>,
-    ) -> Self {
+    pub fn style(mut self, style: impl Into<<Renderer::Theme as StyleSheet>::Style>) -> Self {
         self.style = style.into();
         self
     }
@@ -138,13 +141,12 @@ impl<'a, T, Message, Renderer> Slider<'a, T, Message, Renderer>
     }
 }
 
-impl<'a, T, Message, Renderer> Widget<Message, Renderer>
-for Slider<'a, T, Message, Renderer>
-    where
-        T: Copy + Into<f64> + num_traits::FromPrimitive,
-        Message: Clone,
-        Renderer: iced_native::Renderer,
-        Renderer::Theme: StyleSheet,
+impl<'a, T, Message, Renderer> Widget<Message, Renderer> for Slider<'a, T, Message, Renderer>
+where
+    T: Copy + Into<f64> + num_traits::FromPrimitive,
+    Message: Clone,
+    Renderer: iced_native::Renderer,
+    Renderer::Theme: StyleSheet,
 {
     fn width(&self) -> Length {
         self.width
@@ -154,11 +156,7 @@ for Slider<'a, T, Message, Renderer>
         Length::Shrink
     }
 
-    fn layout(
-        &self,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&self, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
         let limits = limits.width(self.width).height(self.height);
         let size = limits.resolve(Size::ZERO);
 
@@ -227,25 +225,19 @@ for Slider<'a, T, Message, Renderer>
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        mouse_interaction(
-            layout,
-            cursor_position,
-            tree.state.downcast_ref::<State>(),
-        )
+        mouse_interaction(layout, cursor_position, tree.state.downcast_ref::<State>())
     }
 }
 
 impl<'a, T, Message, Renderer> From<Slider<'a, T, Message, Renderer>>
-for Element<'a, Message, Renderer>
-    where
-        T: 'a + Copy + Into<f64> + num_traits::FromPrimitive,
-        Message: 'a + Clone,
-        Renderer: 'a + iced_native::Renderer,
-        Renderer::Theme: StyleSheet,
+    for Element<'a, Message, Renderer>
+where
+    T: 'a + Copy + Into<f64> + num_traits::FromPrimitive,
+    Message: 'a + Clone,
+    Renderer: 'a + iced_native::Renderer,
+    Renderer::Theme: StyleSheet,
 {
-    fn from(
-        slider: Slider<'a, T, Message, Renderer>,
-    ) -> Element<'a, Message, Renderer> {
+    fn from(slider: Slider<'a, T, Message, Renderer>) -> Element<'a, Message, Renderer> {
         Element::new(slider)
     }
 }
@@ -264,9 +256,9 @@ pub fn update<Message, T>(
     on_change: &dyn Fn(T) -> Message,
     on_release: &Option<Message>,
 ) -> event::Status
-    where
-        T: Copy + Into<f64> + num_traits::FromPrimitive,
-        Message: Clone,
+where
+    T: Copy + Into<f64> + num_traits::FromPrimitive,
+    Message: Clone,
 {
     let is_dragging = state.is_dragging;
 
@@ -281,8 +273,7 @@ pub fn update<Message, T>(
             let start = (*range.start()).into();
             let end = (*range.end()).into();
 
-            let percent = f64::from(cursor_position.x - bounds.x)
-                / f64::from(bounds.width);
+            let percent = f64::from(cursor_position.x - bounds.x) / f64::from(bounds.width);
 
             let steps = (percent * (end - start) / step).round();
             let value = steps * step + start;
@@ -363,10 +354,7 @@ pub fn draw<T, R>(
         style_sheet.active(style)
     };
 
-    let (handle_width, handle_height, handle_border_radius) = match style
-        .handle
-        .shape
-    {
+    let (handle_width, handle_height, handle_border_radius) = match style.handle.shape {
         HandleShape::Circle { radius } => (radius * 2.0, radius * 2.0, radius),
         HandleShape::Rectangle {
             width,
@@ -384,8 +372,7 @@ pub fn draw<T, R>(
     let offset = if range_start >= range_end {
         0.0
     } else {
-        (bounds.width - handle_width) * (value - range_start)
-            / (range_end - range_start)
+        (bounds.width - handle_width) * (value - range_start) / (range_end - range_start)
     };
 
     let rail_y = bounds.y + bounds.height / 2.0;

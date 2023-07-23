@@ -4,18 +4,23 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::Read;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Arc;
 use std::time::Duration;
 
-use iced::{Alignment, Application, clipboard, Color, Command, Element, executor, Font, Length, Renderer, Settings, Subscription, theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::time::every;
-use iced::widget::{canvas, Column, Row, Space, svg, Text};
+use iced::widget::{canvas, svg, Column, Row, Space, Text};
 use iced::window::{PlatformSpecific, Settings as Window};
-use iced_native::widget::{button, checkbox, container, pick_list, progress_bar, scrollable, text, text_input};
+use iced::{
+    clipboard, executor, theme, Alignment, Application, Color, Command, Element, Font, Length,
+    Renderer, Settings, Subscription,
+};
 use iced_native::widget::scrollable::Properties;
+use iced_native::widget::{
+    button, checkbox, container, pick_list, progress_bar, scrollable, text, text_input,
+};
 use mega::Client;
 use native_dialog::FileDialog;
 use num_traits::cast::ToPrimitive;
@@ -27,11 +32,13 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
-use crate::{Download, DownloadQueue, get_files, MegaFile, ProxyMode, runner, RunnerMessage, styles};
 use crate::config::Config;
 use crate::loading_wheel::LoadingWheel;
 use crate::modal::Modal;
 use crate::slider::Slider;
+use crate::{
+    get_files, runner, styles, Download, DownloadQueue, MegaFile, ProxyMode, RunnerMessage,
+};
 
 const CHECK_ICON: &[u8] = include_bytes!("../assets/check.svg");
 const COLLAPSE_ICON: &[u8] = include_bytes!("../assets/collapse.svg");
@@ -46,7 +53,8 @@ const X_ICON: &[u8] = include_bytes!("../assets/x.svg");
 const PAUSE_ICON: &[u8] = include_bytes!("../assets/pause.svg");
 const PLAY_ICON: &[u8] = include_bytes!("../assets/play.svg");
 
-const INCONSOLATA_MEDIUM: &[u8] = include_bytes!("../assets/Inconsolata/static/Inconsolata-Medium.ttf");
+const INCONSOLATA_MEDIUM: &[u8] =
+    include_bytes!("../assets/Inconsolata/static/Inconsolata-Medium.ttf");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum Theme {
@@ -59,22 +67,20 @@ pub(crate) enum Theme {
 }
 
 impl Theme {
-    pub const ALL: [Self; 3] = [
-        Self::System,
-        Self::Dark,
-        Self::Light,
-    ];
+    pub const ALL: [Self; 3] = [Self::System, Self::Dark, Self::Light];
 }
 
 // implement display for theme dropdown
 impl Display for Theme {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}",
-               match self {
-                   Self::System => "System Default",
-                   Self::Dark => "Dark",
-                   Self::Light => "Light",
-               }
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::System => "System Default",
+                Self::Dark => "Dark",
+                Self::Light => "Light",
+            }
         )
     }
 }
@@ -90,7 +96,7 @@ impl From<mega::Error> for MegaError {
     fn from(e: mega::Error) -> Self {
         match e {
             mega::Error::OutOfBandwidth => Self::OutOfBandwidth,
-            _ => Self::Other(Arc::new(e))
+            _ => Self::Other(Arc::new(e)),
         }
     }
 }
@@ -271,12 +277,10 @@ impl Application for App {
                 if let Some(url) = contents {
                     if self.url_regex.is_match(&url) {
                         // create new url input with url as value
-                        let index = self.url_input.insert(
-                            UrlInput {
-                                value: url.clone(),
-                                status: UrlStatus::None,
-                            },
-                        );
+                        let index = self.url_input.insert(UrlInput {
+                            value: url.clone(),
+                            status: UrlStatus::None,
+                        });
 
                         // load the url
                         Command::perform(async move { index }, Message::AddUrl)
@@ -329,7 +333,9 @@ impl Application for App {
             }
             // perform AddUrl for every url input
             Message::AddAllUrls => {
-                let commands: Vec<_> = self.url_input.data
+                let commands: Vec<_> = self
+                    .url_input
+                    .data
                     .keys()
                     .cloned()
                     .map(|index| Command::perform(async move { index }, Message::AddUrl))
@@ -364,7 +370,8 @@ impl Application for App {
             // add loaded files to download queue
             Message::AddFiles => {
                 // flatten file structure into a list of downloads
-                let downloads = self.files
+                let downloads = self
+                    .files
                     .iter()
                     .flat_map(|file| file.iter())
                     .filter(|file| {
@@ -401,10 +408,8 @@ impl Application for App {
                 match message {
                     RunnerMessage::Start(download) => {
                         // add download to active downloads
-                        self.active_downloads.insert(
-                            download.node.hash().to_string(),
-                            download,
-                        );
+                        self.active_downloads
+                            .insert(download.node.hash().to_string(), download);
                     }
                     RunnerMessage::Stop(id) => {
                         // add downloaded bytes to bandwidth counter
@@ -431,7 +436,8 @@ impl Application for App {
                     MegaError::OutOfBandwidth => {
                         if !self.all_paused {
                             self.error_modal = Some("Out of bandwidth".to_string());
-                            Command::perform(async {}, |_| Message::PauseDownloads) // pause downloads
+                            Command::perform(async {}, |_| Message::PauseDownloads)
+                        // pause downloads
                         } else {
                             Command::none()
                         }
@@ -447,11 +453,13 @@ impl Application for App {
                 match route {
                     Route::Home | Route::Import | Route::Settings => self.route = route,
                     // only navigate to ChooseFiles if files are loaded
-                    Route::ChooseFiles => if self.files.is_empty() {
-                        self.error_modal = Some("No files imported".to_string())
-                    } else {
-                        self.route = route
-                    },
+                    Route::ChooseFiles => {
+                        if self.files.is_empty() {
+                            self.error_modal = Some("No files imported".to_string())
+                        } else {
+                            self.route = route
+                        }
+                    }
                 }
 
                 Command::none()
@@ -459,11 +467,13 @@ impl Application for App {
             // toggle whether a file should be downloaded
             Message::ToggleFile((checked, file)) => {
                 // insert an entry for the file in the filter
-                self.file_filter.insert(file.node.hash().to_string(), checked);
+                self.file_filter
+                    .insert(file.node.hash().to_string(), checked);
 
                 // all children of the file should be have the same entry in the filter
                 file.iter().for_each(|file| {
-                    self.file_filter.insert(file.node.hash().to_string(), checked);
+                    self.file_filter
+                        .insert(file.node.hash().to_string(), checked);
                 });
 
                 Command::none()
@@ -476,7 +486,10 @@ impl Application for App {
                     // if the input doesn't exist, create it
                     self.url_input.update(
                         index,
-                        UrlInput { value, status: UrlStatus::None },
+                        UrlInput {
+                            value,
+                            status: UrlStatus::None,
+                        },
                     );
                 }
 
@@ -496,12 +509,10 @@ impl Application for App {
             }
             // create a new url input
             Message::AddInput => {
-                self.url_input.insert(
-                    UrlInput {
-                        value: String::new(),
-                        status: UrlStatus::None,
-                    },
-                );
+                self.url_input.insert(UrlInput {
+                    value: String::new(),
+                    status: UrlStatus::None,
+                });
 
                 Command::none()
             }
@@ -517,13 +528,16 @@ impl Application for App {
                     UrlStatus::Loading(ref mut angle) => {
                         *angle += 0.2;
                         // continue the loop
-                        Command::perform(async move {
-                            sleep(Duration::from_millis(10)).await;
-                            index
-                        }, Message::Tick)
+                        Command::perform(
+                            async move {
+                                sleep(Duration::from_millis(10)).await;
+                                index
+                            },
+                            Message::Tick,
+                        )
                     }
                     // otherwise break the loop
-                    _ => Command::none()
+                    _ => Command::none(),
                 }
             }
             // close error modal
@@ -534,7 +548,7 @@ impl Application for App {
             // cancels all downloads
             Message::CancelDownloads => {
                 // clear the queue
-                while let Some(_) = self.download_queue.try_pop() {}
+                while self.download_queue.try_pop().is_some() {}
 
                 self.stop_runner(); // stop the runner
                 self.active_downloads.clear(); // clear active downloads
@@ -598,7 +612,10 @@ impl Application for App {
                         // deletes the inactive runner
                         self.stop_runner();
                     } else {
-                        self.error_modal = Some("Cannot apply these configuration changes while downloads are active".to_string());
+                        self.error_modal = Some(
+                            "Cannot apply these configuration changes while downloads are active"
+                                .to_string(),
+                        );
                         return Command::none();
                     }
                 }
@@ -623,36 +640,50 @@ impl Application for App {
 
                 // update the config
                 match index {
-                    0 => if let Some(value) = value.to_usize() {
-                        self.config.max_threads = value;
+                    0 => {
+                        if let Some(value) = value.to_usize() {
+                            self.config.max_threads = value;
 
-                        if self.config.max_threads_per_file > value {
-                            self.config.max_threads_per_file = value;
+                            if self.config.max_threads_per_file > value {
+                                self.config.max_threads_per_file = value;
+                            }
+
+                            if self.config.max_concurrent_files > value {
+                                self.config.max_concurrent_files = value;
+                            }
                         }
-
-                        if self.config.max_concurrent_files > value {
+                    }
+                    1 => {
+                        if let Some(value) = value.to_usize() {
                             self.config.max_concurrent_files = value;
                         }
                     }
-                    1 => if let Some(value) = value.to_usize() {
-                        self.config.max_concurrent_files = value;
-                    },
-                    2 => if let Some(value) = value.to_usize() {
-                        self.config.max_threads_per_file = value;
-                    },
-                    3 => if let Some(value) = value.to_u64() {
-                        self.config.timeout = value;
-                    },
-                    4 => if let Some(value) = value.to_usize() {
-                        self.config.max_retries = value;
-                    },
-                    5 => if let Some(value) = value.to_u64() {
-                        self.config.min_retry_delay = value;
-                    },
-                    6 => if let Some(value) = value.to_u64() {
-                        self.config.max_retry_delay = value;
-                    },
-                    _ => unreachable!()
+                    2 => {
+                        if let Some(value) = value.to_usize() {
+                            self.config.max_threads_per_file = value;
+                        }
+                    }
+                    3 => {
+                        if let Some(value) = value.to_u64() {
+                            self.config.timeout = value;
+                        }
+                    }
+                    4 => {
+                        if let Some(value) = value.to_usize() {
+                            self.config.max_retries = value;
+                        }
+                    }
+                    5 => {
+                        if let Some(value) = value.to_u64() {
+                            self.config.min_retry_delay = value;
+                        }
+                    }
+                    6 => {
+                        if let Some(value) = value.to_u64() {
+                            self.config.max_retry_delay = value;
+                        }
+                    }
+                    _ => unreachable!(),
                 }
 
                 Command::none()
@@ -713,7 +744,8 @@ impl Application for App {
             Message::AddProxies => {
                 if let Ok(Some(file_path)) = FileDialog::new()
                     .add_filter("Text File", &["txt"])
-                    .show_open_single_file() {
+                    .show_open_single_file()
+                {
                     match std::fs::File::open(file_path) {
                         Ok(mut file) => {
                             let mut contents = String::new();
@@ -745,7 +777,8 @@ impl Application for App {
                 self.file_filter.clear(); // clear file filter
 
                 // get keys of loaded url inputs
-                let keys: Vec<_> = self.url_input
+                let keys: Vec<_> = self
+                    .url_input
                     .data
                     .iter()
                     .filter(|(_, input)| input.status == UrlStatus::Loaded)
@@ -797,30 +830,40 @@ impl Application for App {
                                     text(download.node.name())
                                         .width(Length::Fill)
                                         .height(Length::Fill)
-                                        .vertical_alignment(Vertical::Center)
+                                        .vertical_alignment(Vertical::Center),
                                 )
                                 .push(Space::new(Length::Fixed(3_f32), Length::Shrink))
                                 .push(
                                     progress_bar(0_f32..=1_f32, progress)
-                                        .style(theme::ProgressBar::Custom(Box::new(styles::progress_bar::ProgressBar)))
+                                        .style(theme::ProgressBar::Custom(Box::new(
+                                            styles::progress_bar::ProgressBar,
+                                        )))
                                         .width(Length::Fixed(80_f32))
-                                        .height(Length::Fixed(15_f32))
+                                        .height(Length::Fixed(15_f32)),
                                 )
                                 .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
                                 .push(
-                                    text(format!("{} MB/s", pad_f32(download.speed())).replace("0", "O"))
-                                        .width(Length::Shrink)
-                                        .height(Length::Fill)
-                                        .vertical_alignment(Vertical::Center)
-                                        .font(Font::External { name: "Inconsolata", bytes: INCONSOLATA_MEDIUM })
-                                        .size(16)
+                                    text(
+                                        format!("{} MB/s", pad_f32(download.speed()))
+                                            .replace('0', "O"),
+                                    )
+                                    .width(Length::Shrink)
+                                    .height(Length::Fill)
+                                    .vertical_alignment(Vertical::Center)
+                                    .font(Font::External {
+                                        name: "Inconsolata",
+                                        bytes: INCONSOLATA_MEDIUM,
+                                    })
+                                    .size(16),
                                 )
                                 .push(Space::new(Length::Fixed(5_f32), Length::Shrink))
                                 .push(icon_button(X_ICON, Message::CancelDownload(id.clone())))
                                 .push(pause_button)
-                                .push(Space::new(Length::Fixed(7_f32), Length::Shrink))
+                                .push(Space::new(Length::Fixed(7_f32), Length::Shrink)),
                         )
-                            .style(theme::Container::Custom(Box::new(styles::container::Download { index })))
+                        .style(theme::Container::Custom(Box::new(
+                            styles::container::Download { index },
+                        ))),
                     );
                 }
 
@@ -830,24 +873,18 @@ impl Application for App {
                             .height(Length::Fixed(30_f32))
                             .width(Length::Fixed(165_f32))
                             .vertical_alignment(Vertical::Center)
-                            .horizontal_alignment(Horizontal::Center)
+                            .horizontal_alignment(Horizontal::Center),
                     )
                 }
 
-                let mut download_group = Column::new()
-                    .push(
-                        scrollable(
-                            download_list
-                        )
-                            .vertical_scroll(
-                                Properties::default()
-                                    .width(5)
-                                    .scroller_width(5)
-                                    .margin(0)
-                            )
-                            .style(theme::Scrollable::Custom(Box::new(styles::scrollable::Scrollable)))
-                            .height(Length::Fill)
-                    );
+                let mut download_group = Column::new().push(
+                    scrollable(download_list)
+                        .vertical_scroll(Properties::default().width(5).scroller_width(5).margin(0))
+                        .style(theme::Scrollable::Custom(Box::new(
+                            styles::scrollable::Scrollable,
+                        )))
+                        .height(Length::Fill),
+                );
 
                 if !self.active_downloads.is_empty() {
                     download_group = download_group.push(
@@ -855,42 +892,47 @@ impl Application for App {
                             .spacing(10)
                             .padding(8)
                             .height(Length::Fixed(45_f32))
-                            .push(
-                                if self.all_paused {
-                                    button(" Resume All ")
-                                        .on_press(Message::ResumeDownloads)
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                } else {
-                                    button(" Pause All ")
-                                        .on_press(Message::PauseDownloads)
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                }
-                            )
+                            .push(if self.all_paused {
+                                button(" Resume All ")
+                                    .on_press(Message::ResumeDownloads)
+                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                            } else {
+                                button(" Pause All ")
+                                    .on_press(Message::PauseDownloads)
+                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                            })
                             .push(
                                 button(" Cancel All ")
                                     .on_press(Message::CancelDownloads)
-                                    .style(theme::Button::Custom(Box::new(styles::button::WarningButton)))
+                                    .style(theme::Button::Custom(Box::new(
+                                        styles::button::WarningButton,
+                                    ))),
                             )
                             .push(
                                 container(
-                                    text(format!(" {:.2} GB used ", self.bandwidth_counter as f32 / 1073741824_f32).replace("0", "O"))
-                                        .font(Font::External { name: "Inconsolata", bytes: INCONSOLATA_MEDIUM })
-                                        .vertical_alignment(Vertical::Center)
-                                        .height(Length::Fill)
+                                    text(
+                                        format!(
+                                            " {:.2} GB used ",
+                                            self.bandwidth_counter as f32 / 1073741824_f32
+                                        )
+                                        .replace('0', "O"),
+                                    )
+                                    .font(Font::External {
+                                        name: "Inconsolata",
+                                        bytes: INCONSOLATA_MEDIUM,
+                                    })
+                                    .vertical_alignment(Vertical::Center)
+                                    .height(Length::Fill),
                                 )
-                                    .style(theme::Container::Custom(Box::new(styles::container::Pill)))
-                                    .height(Length::Fill)
-                            )
+                                .style(theme::Container::Custom(Box::new(styles::container::Pill)))
+                                .height(Length::Fill),
+                            ),
                     )
                 }
 
-                let mut error_log = Column::new()
-                    .push(
-                        scrollable(
-                            self.error_log()
-                        )
-                            .style(theme::Scrollable::Custom(Box::new(styles::scrollable::Scrollable)))
-                    );
+                let mut error_log = Column::new().push(scrollable(self.error_log()).style(
+                    theme::Scrollable::Custom(Box::new(styles::scrollable::Scrollable)),
+                ));
 
                 if self.errors.is_empty() {
                     error_log = error_log.push(
@@ -898,7 +940,7 @@ impl Application for App {
                             .height(Length::Fixed(30_f32))
                             .width(Length::Fixed(70_f32))
                             .vertical_alignment(Vertical::Center)
-                            .horizontal_alignment(Horizontal::Center)
+                            .horizontal_alignment(Horizontal::Center),
                     )
                 }
 
@@ -909,58 +951,59 @@ impl Application for App {
                         .spacing(5)
                         .push(
                             container(download_group)
-                                .style(theme::Container::Custom(Box::new(styles::container::DownloadList)))
+                                .style(theme::Container::Custom(Box::new(
+                                    styles::container::DownloadList,
+                                )))
                                 .padding(2)
                                 .width(Length::Fill)
-                                .height(Length::FillPortion(2))
+                                .height(Length::FillPortion(2)),
                         )
                         .push(
                             container(error_log)
-                                .style(theme::Container::Custom(Box::new(styles::container::DownloadList)))
+                                .style(theme::Container::Custom(Box::new(
+                                    styles::container::DownloadList,
+                                )))
                                 .padding(8)
                                 .width(Length::Fill)
-                                .height(Length::FillPortion(1))
-                        )
+                                .height(Length::FillPortion(1)),
+                        ),
                 )
             }
-            Route::Import => {
-                container(
-                    Column::new()
-                        .spacing(5)
-                        .push(
-                            scrollable(
-                                self.url_inputs()
+            Route::Import => container(
+                Column::new()
+                    .spacing(5)
+                    .push(
+                        scrollable(self.url_inputs())
+                            .style(theme::Scrollable::Custom(Box::new(
+                                styles::scrollable::Scrollable,
+                            )))
+                            .height(Length::Fill),
+                    )
+                    .push(
+                        Row::new()
+                            .spacing(10)
+                            .push(
+                                button(" Add from clipboard ")
+                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .on_press(Message::AddUrlClipboard),
                             )
-                                .style(theme::Scrollable::Custom(Box::new(styles::scrollable::Scrollable)))
-                                .height(Length::Fill)
-                        )
-                        .push(
-                            Row::new()
-                                .spacing(10)
-                                .push(
-                                    button(" Add from clipboard ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .on_press(Message::AddUrlClipboard)
-                                )
-                                .push(
-                                    button(" + ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .on_press(Message::AddInput)
-                                )
-                                .push(
-                                    button(" Load all ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .on_press(Message::AddAllUrls)
-                                )
-                        )
-                )
-            }
+                            .push(
+                                button(" + ")
+                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .on_press(Message::AddInput),
+                            )
+                            .push(
+                                button(" Load all ")
+                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .on_press(Message::AddAllUrls),
+                            ),
+                    ),
+            ),
             Route::ChooseFiles => {
-                let mut column = Column::new()
-                    .width(Length::Fill)
-                    .spacing(5);
+                let mut column = Column::new().width(Length::Fill).spacing(5);
 
-                let size: u64 = self.files
+                let size: u64 = self
+                    .files
                     .iter()
                     .flat_map(|file| file.iter())
                     .filter(|file| {
@@ -979,38 +1022,46 @@ impl Application for App {
 
                 container(
                     Column::new()
-                        .push(
-                            scrollable(column)
-                                .width(Length::Fill)
-                                .height(Length::Fill)
-                        )
+                        .push(scrollable(column).width(Length::Fill).height(Length::Fill))
                         .push(
                             Row::new()
                                 .height(Length::Fixed(30_f32))
                                 .spacing(10)
                                 .push(
                                     button(" Add to queue ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .on_press(Message::AddFiles)
+                                        .style(theme::Button::Custom(Box::new(
+                                            styles::button::Button,
+                                        )))
+                                        .on_press(Message::AddFiles),
                                 )
                                 .push(
                                     button(" Cancel ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .on_press(Message::ClearFiles)
+                                        .style(theme::Button::Custom(Box::new(
+                                            styles::button::Button,
+                                        )))
+                                        .on_press(Message::ClearFiles),
                                 )
                                 .push(
                                     container(
-                                        Text::new(format!(" {:.2} GB ", size as f32 / 1073741824_f32).replace("0", "O"))
-                                            .font(Font::External { name: "Inconsolata", bytes: INCONSOLATA_MEDIUM })
-                                            .vertical_alignment(Vertical::Center)
-                                            .horizontal_alignment(Horizontal::Center)
-                                            .width(Length::Fill)
-                                            .height(Length::Fill)
+                                        Text::new(
+                                            format!(" {:.2} GB ", size as f32 / 1073741824_f32)
+                                                .replace('0', "O"),
+                                        )
+                                        .font(Font::External {
+                                            name: "Inconsolata",
+                                            bytes: INCONSOLATA_MEDIUM,
+                                        })
+                                        .vertical_alignment(Vertical::Center)
+                                        .horizontal_alignment(Horizontal::Center)
+                                        .width(Length::Fill)
+                                        .height(Length::Fill),
                                     )
-                                        .style(theme::Container::Custom(Box::new(styles::container::Pill)))
-                                        .height(Length::Fill)
-                                )
-                        )
+                                    .style(theme::Container::Custom(Box::new(
+                                        styles::container::Pill,
+                                    )))
+                                    .height(Length::Fill),
+                                ),
+                        ),
                 )
             }
             Route::Settings => {
@@ -1026,17 +1077,62 @@ impl Application for App {
                 container(
                     Column::new()
                         .width(Length::Fixed(350_f32))
-                        .push(self.settings_slider(0, self.config.max_threads, 1_f64..=50_f64, "Max threads:"))
-                        .push(self.settings_slider(1, self.config.max_concurrent_files, 1_f64..=self.config.max_threads as f64, "Max concurrent files:"))
-                        .push(self.settings_slider(2, self.config.max_threads_per_file, 1_f64..=self.config.max_threads as f64, "Max threads per files:"))
-                        .push(self.settings_slider(3, self.config.timeout as usize, 100_f64..=60000_f64, "Timeout:"))
-                        .push(self.settings_slider(4, self.config.max_retries, 1_f64..=10_f64, "Max retries:"))
-                        .push(self.settings_slider(5, self.config.min_retry_delay as usize, 100_f64..=self.config.max_retry_delay as f64, "Min Retry delay:"))
-                        .push(self.settings_slider(6, self.config.max_retry_delay as usize, self.config.min_retry_delay as f64..=60000_f64, "Max Retry delay:"))
+                        .push(self.settings_slider(
+                            0,
+                            self.config.max_threads,
+                            1_f64..=50_f64,
+                            "Max threads:",
+                        ))
+                        .push(self.settings_slider(
+                            1,
+                            self.config.max_concurrent_files,
+                            1_f64..=self.config.max_threads as f64,
+                            "Max concurrent files:",
+                        ))
+                        .push(self.settings_slider(
+                            2,
+                            self.config.max_threads_per_file,
+                            1_f64..=self.config.max_threads as f64,
+                            "Max threads per files:",
+                        ))
+                        .push(self.settings_slider(
+                            3,
+                            self.config.timeout as usize,
+                            100_f64..=60000_f64,
+                            "Timeout:",
+                        ))
+                        .push(self.settings_slider(
+                            4,
+                            self.config.max_retries,
+                            1_f64..=10_f64,
+                            "Max retries:",
+                        ))
+                        .push(self.settings_slider(
+                            5,
+                            self.config.min_retry_delay as usize,
+                            100_f64..=self.config.max_retry_delay as f64,
+                            "Min Retry delay:",
+                        ))
+                        .push(self.settings_slider(
+                            6,
+                            self.config.max_retry_delay as usize,
+                            self.config.min_retry_delay as f64..=60000_f64,
+                            "Max Retry delay:",
+                        ))
                         .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
-                        .push(self.settings_picklist("Theme", &Theme::ALL[..], Some(self.config.theme), Message::ThemeChanged))
+                        .push(self.settings_picklist(
+                            "Theme",
+                            &Theme::ALL[..],
+                            Some(self.config.theme),
+                            Message::ThemeChanged,
+                        ))
                         .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
-                        .push(self.settings_picklist("Proxy Mode", &ProxyMode::ALL[..], Some(self.config.proxy_mode), Message::ProxyModeChanged))
+                        .push(self.settings_picklist(
+                            "Proxy Mode",
+                            &ProxyMode::ALL[..],
+                            Some(self.config.proxy_mode),
+                            Message::ProxyModeChanged,
+                        ))
                         .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
                         .push(self.proxy_selector())
                         .push(Space::new(Length::Shrink, Length::Fill))
@@ -1045,18 +1141,22 @@ impl Application for App {
                                 .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
                                 .push(
                                     button(" Save ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .on_press(Message::SaveConfig)
+                                        .style(theme::Button::Custom(Box::new(
+                                            styles::button::Button,
+                                        )))
+                                        .on_press(Message::SaveConfig),
                                 )
                                 .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
                                 .push(apply_button)
                                 .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
                                 .push(
                                     button(" Reset ")
-                                        .style(theme::Button::Custom(Box::new(styles::button::WarningButton)))
-                                        .on_press(Message::ResetConfig)
-                                )
-                        )
+                                        .style(theme::Button::Custom(Box::new(
+                                            styles::button::WarningButton,
+                                        )))
+                                        .on_press(Message::ResetConfig),
+                                ),
+                        ),
                 )
             }
         };
@@ -1071,55 +1171,55 @@ impl Application for App {
                             .spacing(4)
                             .push(self.nav_button("Home", Route::Home, false))
                             .push(self.nav_button("Import", Route::Import, false))
-                            .push(self.nav_button("Choose files", Route::ChooseFiles, self.files.is_empty()))
+                            .push(self.nav_button(
+                                "Choose files",
+                                Route::ChooseFiles,
+                                self.files.is_empty(),
+                            ))
                             .push(Space::new(Length::Shrink, Length::Fill))
-                            .push(self.nav_button("Settings", Route::Settings, false))
+                            .push(self.nav_button("Settings", Route::Settings, false)),
                     )
-                        .width(Length::Fixed(170_f32))
-                        .height(Length::Fill)
-                        .style(theme::Container::Custom(Box::new(styles::container::Nav)))
+                    .width(Length::Fixed(170_f32))
+                    .height(Length::Fill)
+                    .style(theme::Container::Custom(Box::new(styles::container::Nav))),
                 )
-                .push(
-                    content
-                        .padding(10)
-                        .width(Length::Fill)
-                )
+                .push(content.padding(10).width(Length::Fill)),
         )
-            .style(theme::Container::Custom(Box::new(styles::container::Body)))
-            .width(Length::Fill)
-            .height(Length::Fill);
+        .style(theme::Container::Custom(Box::new(styles::container::Body)))
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         if let Some(error_message) = &self.error_modal {
-            container(
-                Modal::new(
-                    body,
-                    container(
-                        Column::new()
-                            .spacing(5)
-                            .push(
-                                text(error_message)
-                                    .style(theme::Text::Color(Color::from_rgb8(255, 69, 0)))
-                                    .vertical_alignment(Vertical::Center)
-                                    .horizontal_alignment(Horizontal::Center)
-                            )
-                            .push(Space::new(Length::Fixed(100_f32), Length::Fixed(2_f32)))
-                            .push(
-                                Row::new()
-                                    .spacing(5)
-                                    .push(Space::new(Length::FillPortion(3), Length::Shrink))
-                                    .push(
-                                        button(" Ok ")
-                                            .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                            .on_press(Message::CloseModal)
-                                        // .width(Length::FillPortion(1))
-                                    )
-                            )
-                    )
-                        .width(Length::Fixed(150_f32))
-                        .padding(10)
-                        .style(theme::Container::Custom(Box::new(styles::container::Modal))),
+            container(Modal::new(
+                body,
+                container(
+                    Column::new()
+                        .spacing(5)
+                        .push(
+                            text(error_message)
+                                .style(theme::Text::Color(Color::from_rgb8(255, 69, 0)))
+                                .vertical_alignment(Vertical::Center)
+                                .horizontal_alignment(Horizontal::Center),
+                        )
+                        .push(Space::new(Length::Fixed(100_f32), Length::Fixed(2_f32)))
+                        .push(
+                            Row::new()
+                                .spacing(5)
+                                .push(Space::new(Length::FillPortion(3), Length::Shrink))
+                                .push(
+                                    button(" Ok ")
+                                        .style(theme::Button::Custom(Box::new(
+                                            styles::button::Button,
+                                        )))
+                                        .on_press(Message::CloseModal), // .width(Length::FillPortion(1))
+                                ),
+                        ),
                 )
-            ).into()
+                .width(Length::Fixed(150_f32))
+                .padding(10)
+                .style(theme::Container::Custom(Box::new(styles::container::Modal))),
+            ))
+            .into()
         } else {
             body.into()
         }
@@ -1130,8 +1230,8 @@ impl Application for App {
         match self.config.theme {
             Theme::System => match dark_light::detect() {
                 dark_light::Mode::Light => iced::Theme::Light,
-                _ => iced::Theme::Dark // Default and Dark map to Dark
-            }
+                _ => iced::Theme::Dark, // Default and Dark map to Dark
+            },
             Theme::Light => iced::Theme::Light,
             Theme::Dark => iced::Theme::Dark,
         }
@@ -1216,7 +1316,7 @@ impl App {
                 .push(
                     text(file.node.name())
                         .width(Length::Fill)
-                        .vertical_alignment(Vertical::Center)
+                        .vertical_alignment(Vertical::Center),
                 )
                 .push(
                     checkbox(
@@ -1224,56 +1324,54 @@ impl App {
                         *self.file_filter.get(file.node.hash()).unwrap_or(&true),
                         |value| Message::ToggleFile((value, file.clone())),
                     )
-                        .style(theme::Checkbox::Custom(Box::new(styles::checkbox::Checkbox)))
+                    .style(theme::Checkbox::Custom(Box::new(
+                        styles::checkbox::Checkbox,
+                    ))),
                 )
                 .into()
         } else {
             let expanded = *self.expanded_files.get(file.node.hash()).unwrap_or(&false);
 
-            let mut column = Column::new()
-                .spacing(5)
-                .push(
-                    Row::new()
-                        .spacing(5)
-                        .push(
-                            button(
-                                svg(
-                                    svg::Handle::from_memory(
-                                        if expanded {
-                                            COLLAPSE_ICON
-                                        } else {
-                                            EXPAND_ICON
-                                        }
-                                    )
-                                )
-                                    .height(Length::Fixed(18_f32))
-                                    .width(Length::Fixed(18_f32))
-                            )
-                                .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
-                                .on_press(Message::ToggleExpanded(file.node.hash().to_string()))
-                                .padding(1)
+            let mut column = Column::new().spacing(5).push(
+                Row::new()
+                    .spacing(5)
+                    .push(
+                        button(
+                            svg(svg::Handle::from_memory(if expanded {
+                                COLLAPSE_ICON
+                            } else {
+                                EXPAND_ICON
+                            }))
+                            .height(Length::Fixed(18_f32))
+                            .width(Length::Fixed(18_f32)),
                         )
-                        .push(
-                            text(file.node.name())
-                                .width(Length::Fill)
-                                .vertical_alignment(Vertical::Center)
+                        .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+                        .on_press(Message::ToggleExpanded(file.node.hash().to_string()))
+                        .padding(1),
+                    )
+                    .push(
+                        text(file.node.name())
+                            .width(Length::Fill)
+                            .vertical_alignment(Vertical::Center),
+                    )
+                    .push(
+                        checkbox(
+                            "",
+                            *self.file_filter.get(file.node.hash()).unwrap_or(&true),
+                            |value| Message::ToggleFile((value, file.clone())),
                         )
-                        .push(
-                            checkbox(
-                                "",
-                                *self.file_filter.get(file.node.hash()).unwrap_or(&true),
-                                |value| Message::ToggleFile((value, file.clone())),
-                            )
-                                .style(theme::Checkbox::Custom(Box::new(styles::checkbox::Checkbox)))
-                        )
-                );
+                        .style(theme::Checkbox::Custom(Box::new(
+                            styles::checkbox::Checkbox,
+                        ))),
+                    ),
+            );
 
             if expanded {
                 for file in &file.children {
                     column = column.push(
                         Row::new()
                             .push(Space::new(Length::Fixed(20.0), Length::Shrink))
-                            .push(self.recursive_files(&file))
+                            .push(self.recursive_files(file)),
                     );
                 }
             }
@@ -1284,17 +1382,11 @@ impl App {
 
     fn nav_button<'a>(&self, label: &'a str, route: Route, disabled: bool) -> Element<'a, Message> {
         let style = if self.route == route {
-            styles::svg::SvgIcon::new(
-                Color::from_rgb8(73, 0, 241).into()
-            )
+            styles::svg::SvgIcon::new(Color::from_rgb8(73, 0, 241).into())
         } else if disabled {
-            styles::svg::SvgIcon::new(
-                Color::from_rgb8(43, 0, 161).into()
-            )
+            styles::svg::SvgIcon::new(Color::from_rgb8(43, 0, 161).into())
         } else {
-            styles::svg::SvgIcon::new(
-                Color::from_rgb8(53, 0, 211).into()
-            )
+            styles::svg::SvgIcon::new(Color::from_rgb8(53, 0, 211).into())
         };
 
         let mut row = Row::new()
@@ -1302,16 +1394,13 @@ impl App {
             .height(Length::Fixed(40_f32));
 
         if self.route == route {
-            row = row.push(
-                svg(svg::Handle::from_memory(SELECTED_ICON))
-                    .style(
-                        theme::Svg::Custom(
-                            Box::new(style.clone())
-                        )
-                    )
-                    .width(Length::Fixed(4_f32))
-                    .height(Length::Fixed(25_f32))
-            )
+            row = row
+                .push(
+                    svg(svg::Handle::from_memory(SELECTED_ICON))
+                        .style(theme::Svg::Custom(Box::new(style.clone())))
+                        .width(Length::Fixed(4_f32))
+                        .height(Length::Fixed(25_f32)),
+                )
                 .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
         } else {
             row = row.push(Space::new(Length::Fixed(12_f32), Length::Shrink))
@@ -1330,25 +1419,19 @@ impl App {
                     svg(handle)
                         .width(Length::Fixed(30_f32))
                         .height(Length::Fixed(30_f32))
-                        .style(
-                            theme::Svg::Custom(
-                                Box::new(style)
-                            )
-                        )
+                        .style(theme::Svg::Custom(Box::new(style))),
                 )
-                    .padding(3)
-                    .style(
-                        theme::Container::Custom(
-                            Box::new(styles::container::Icon::new(self.route == route))
-                        )
-                    )
+                .padding(3)
+                .style(theme::Container::Custom(Box::new(
+                    styles::container::Icon::new(self.route == route),
+                ))),
             )
-            .push(
-                Space::new(Length::Fixed(12_f32), Length::Shrink)
-            );
+            .push(Space::new(Length::Fixed(12_f32), Length::Shrink));
 
         let mut button = button(row.push(text(label)))
-            .style(theme::Button::Custom(Box::new(styles::button::Nav { active: self.route == route })))
+            .style(theme::Button::Custom(Box::new(styles::button::Nav {
+                active: self.route == route,
+            })))
             .width(Length::Fill)
             .padding(0);
 
@@ -1360,15 +1443,11 @@ impl App {
     }
 
     fn error_log(&self) -> Element<Message> {
-        let mut column = Column::new()
-            .spacing(2)
-            .width(Length::Fill);
+        let mut column = Column::new().spacing(2).width(Length::Fill);
 
         for error in &self.errors {
-            column = column.push(
-                text(error)
-                    .style(theme::Text::Color(Color::from_rgb8(255, 69, 0)))
-            );
+            column =
+                column.push(text(error).style(theme::Text::Color(Color::from_rgb8(255, 69, 0))));
         }
 
         column.into()
@@ -1379,7 +1458,9 @@ impl App {
 
         for (index, input) in self.url_input.data.iter() {
             let mut text_input = text_input("Url", &input.value)
-                .style(theme::TextInput::Custom(Box::new(styles::text_input::UrlInput { mode: input.status })))
+                .style(theme::TextInput::Custom(Box::new(
+                    styles::text_input::UrlInput { mode: input.status },
+                )))
                 .size(18)
                 .padding(8);
 
@@ -1396,35 +1477,30 @@ impl App {
 
             match input.status {
                 UrlStatus::None | UrlStatus::Invalid => {
-                    row = row
-                        .push(
-                            button(
-                                svg(
-                                    svg::Handle::from_memory(TRASH_ICON)
-                                )
-                                    .width(Length::Fixed(22_f32))
-                                    .height(Length::Fixed(22_f32))
-                            )
-                                .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
-                                .on_press(Message::RemoveInput(*index))
-                                .padding(4)
-                        );
+                    row = row.push(
+                        button(
+                            svg(svg::Handle::from_memory(TRASH_ICON))
+                                .width(Length::Fixed(22_f32))
+                                .height(Length::Fixed(22_f32)),
+                        )
+                        .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+                        .on_press(Message::RemoveInput(*index))
+                        .padding(4),
+                    );
                 }
                 UrlStatus::Loading(angle) => {
-                    row = row
-                        .push(
-                            canvas(LoadingWheel::new(angle))
-                                .width(Length::Fixed(30_f32))
-                                .height(Length::Fixed(30_f32))
-                        );
+                    row = row.push(
+                        canvas(LoadingWheel::new(angle))
+                            .width(Length::Fixed(30_f32))
+                            .height(Length::Fixed(30_f32)),
+                    );
                 }
                 UrlStatus::Loaded => {
-                    row = row
-                        .push(
-                            svg(svg::Handle::from_memory(CHECK_ICON))
-                                .width(Length::Fixed(30_f32))
-                                .height(Length::Fixed(30_f32))
-                        );
+                    row = row.push(
+                        svg(svg::Handle::from_memory(CHECK_ICON))
+                            .width(Length::Fixed(30_f32))
+                            .height(Length::Fixed(30_f32)),
+                    );
                 }
             }
 
@@ -1434,40 +1510,53 @@ impl App {
         inputs.into()
     }
 
-    fn settings_slider<'a>(&self, index: usize, value: usize, range: RangeInclusive<f64>, label: &'a str) -> Element<'a, Message> {
+    fn settings_slider<'a>(
+        &self,
+        index: usize,
+        value: usize,
+        range: RangeInclusive<f64>,
+        label: &'a str,
+    ) -> Element<'a, Message> {
         Row::new()
             .height(Length::Fixed(30_f32))
             .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
             .push(
                 text(label)
                     .vertical_alignment(Vertical::Center)
-                    .height(Length::Fill)
+                    .height(Length::Fill),
             )
             .push(Space::new(Length::Fill, Length::Shrink))
             .push(
-                text(format!("{}", pad_usize(value).replace("0", "O")))
-                    .font(Font::External { name: "Inconsolata", bytes: INCONSOLATA_MEDIUM })
+                text(pad_usize(value).replace('0', "O"))
+                    .font(Font::External {
+                        name: "Inconsolata",
+                        bytes: INCONSOLATA_MEDIUM,
+                    })
                     .vertical_alignment(Vertical::Center)
-                    .height(Length::Fill)
+                    .height(Length::Fill),
             )
             .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
             .push(
-                Slider::new(
-                    range,
-                    value as f64,
-                    move |value| Message::SettingsSlider((index, value)),
-                )
-                    .width(Length::Fixed(130_f32))
-                    .height(30)
-                    .style(theme::Slider::Custom(Box::new(styles::slider::Slider)))
+                Slider::new(range, value as f64, move |value| {
+                    Message::SettingsSlider((index, value))
+                })
+                .width(Length::Fixed(130_f32))
+                .height(30)
+                .style(theme::Slider::Custom(Box::new(styles::slider::Slider))),
             )
             .into()
     }
 
-    fn settings_picklist<'a, T>(&self, label: &'a str, options: impl Into<Cow<'a, [T]>>, selected: Option<T>, message: fn(T) -> Message) -> Element<'a, Message>
-        where
-            T: ToString + Eq + 'static + Clone,
-            [T]: ToOwned<Owned=Vec<T>>,
+    fn settings_picklist<'a, T>(
+        &self,
+        label: &'a str,
+        options: impl Into<Cow<'a, [T]>>,
+        selected: Option<T>,
+        message: fn(T) -> Message,
+    ) -> Element<'a, Message>
+    where
+        T: ToString + Eq + 'static + Clone,
+        [T]: ToOwned<Owned = Vec<T>>,
     {
         Row::new()
             .height(Length::Fixed(30_f32))
@@ -1475,13 +1564,10 @@ impl App {
             .push(
                 text(label)
                     .vertical_alignment(Vertical::Center)
-                    .height(Length::Fill)
+                    .height(Length::Fill),
             )
             .push(Space::new(Length::Fill, Length::Shrink))
-            .push(
-                pick_list(options, selected, message)
-                    .width(Length::Fixed(170_f32))
-            )
+            .push(pick_list(options, selected, message).width(Length::Fixed(170_f32)))
             .into()
     }
 
@@ -1500,20 +1586,20 @@ impl App {
                             .push(Space::new(Length::Fill, Length::Shrink))
                             .push(
                                 button(
-                                    svg(
-                                        svg::Handle::from_memory(X_ICON)
-                                    )
+                                    svg(svg::Handle::from_memory(X_ICON))
                                         .width(Length::Fixed(15_f32))
-                                        .height(Length::Fixed(15_f32))
+                                        .height(Length::Fixed(15_f32)),
                                 )
-                                    .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
-                                    .on_press(Message::RemoveProxy(index))
-                                    .padding(4)
+                                .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+                                .on_press(Message::RemoveProxy(index))
+                                .padding(4),
                             )
-                            .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
+                            .push(Space::new(Length::Fixed(8_f32), Length::Shrink)),
                     )
-                        .style(theme::Container::Custom(Box::new(styles::container::Download { index })))
-                        .width(Length::Fill)
+                    .style(theme::Container::Custom(Box::new(
+                        styles::container::Download { index },
+                    )))
+                    .width(Length::Fill),
                 )
             }
 
@@ -1523,41 +1609,45 @@ impl App {
                         .width(Length::Fixed(100_f32))
                         .height(Length::Fixed(35_f32))
                         .vertical_alignment(Vertical::Center)
-                        .horizontal_alignment(Horizontal::Center)
+                        .horizontal_alignment(Horizontal::Center),
                 );
             }
 
-            column = column
-                .push(
-                    container(
-                        Column::new()
-                            .push(
-                                scrollable(proxy_display)
-                                    .height(Length::Fixed(125_f32))
+            column = column.push(
+                container(
+                    Column::new()
+                        .push(scrollable(proxy_display).height(Length::Fixed(125_f32)))
+                        .push(Space::new(Length::Shrink, Length::Fill))
+                        .push(
+                            container(
+                                button(" Add proxies ")
+                                    .on_press(Message::AddProxies)
+                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .padding(4),
                             )
-                            .push(Space::new(Length::Shrink, Length::Fill))
-                            .push(
-                                container(
-                                    button(" Add proxies ")
-                                        .on_press(Message::AddProxies)
-                                        .style(theme::Button::Custom(Box::new(styles::button::Button)))
-                                        .padding(4)
-                                )
-                                    .padding(5)
-                            )
-                    )
-                        .style(theme::Container::Custom(Box::new(styles::container::DownloadList)))
-                        .height(Length::Fixed(170_f32))
-                        .padding(2)
-                );
+                            .padding(5),
+                        ),
+                )
+                .style(theme::Container::Custom(Box::new(
+                    styles::container::DownloadList,
+                )))
+                .height(Length::Fixed(170_f32))
+                .padding(2),
+            );
         } else if self.config.proxy_mode == ProxyMode::Single {
-            column = column
-                .push(
-                    text_input("Proxy url", self.config.proxies.get(0).unwrap_or(&String::new()))
-                        .on_input(Message::ProxyUrlChanged)
-                        .style(theme::TextInput::Custom(Box::new(styles::text_input::UrlInput { mode: UrlStatus::None })))
-                        .padding(6)
-                );
+            column = column.push(
+                text_input(
+                    "Proxy url",
+                    self.config.proxies.get(0).unwrap_or(&String::new()),
+                )
+                .on_input(Message::ProxyUrlChanged)
+                .style(theme::TextInput::Custom(Box::new(
+                    styles::text_input::UrlInput {
+                        mode: UrlStatus::None,
+                    },
+                )))
+                .padding(6),
+            );
         }
 
         Row::new()
@@ -1594,7 +1684,10 @@ struct IndexMap<T> {
     next_index: usize,
 }
 
-impl<T> IndexMap<T> where T: Default {
+impl<T> IndexMap<T>
+where
+    T: Default,
+{
     fn default() -> Self {
         Self {
             data: HashMap::from([(0, T::default())]),
@@ -1665,7 +1758,10 @@ pub(crate) fn settings() -> Settings<Config> {
 }
 
 // build a new mega client from config
-fn mega_builder(config: &Config, sender: Arc<UnboundedSender<mega::Error>>) -> mega::Result<Client> {
+fn mega_builder(
+    config: &Config,
+    sender: Arc<UnboundedSender<mega::Error>>,
+) -> mega::Result<Client> {
     if config.proxy_mode != ProxyMode::None && config.proxies.is_empty() {
         Err(mega::Error::NoProxies)
     } else {
@@ -1673,24 +1769,23 @@ fn mega_builder(config: &Config, sender: Arc<UnboundedSender<mega::Error>>) -> m
         let http_client = HttpClient::builder()
             .proxy(Proxy::custom({
                 let proxies = config.proxies.clone();
-                let proxy_mode = config.proxy_mode.clone();
+                let proxy_mode = config.proxy_mode;
 
-                move |_| {
-                    match proxy_mode {
-                        ProxyMode::Random => {
-                            let i = fastrand::usize(..proxies.len());
-                            let proxy_url = &proxies[i];
-                            Url::parse(proxy_url).unwrap().into()
-                        }
-                        ProxyMode::Single => {
-                            let proxy_url = &proxies[0];
-                            Url::parse(proxy_url).unwrap().into()
-                        }
-                        ProxyMode::None => None::<Url>,
+                move |_| match proxy_mode {
+                    ProxyMode::Random => {
+                        let i = fastrand::usize(..proxies.len());
+                        let proxy_url = &proxies[i];
+                        Url::parse(proxy_url).unwrap().into()
                     }
+                    ProxyMode::Single => {
+                        let proxy_url = &proxies[0];
+                        Url::parse(proxy_url).unwrap().into()
+                    }
+                    ProxyMode::None => None::<Url>,
                 }
             }))
-            .build().unwrap();
+            .build()
+            .unwrap();
 
         // build mega client
         Client::builder()
@@ -1709,12 +1804,12 @@ fn icon_button(icon: &'static [u8], message: Message) -> Element<Message> {
     button(
         svg(svg::Handle::from_memory(icon))
             .height(Length::Fixed(25_f32))
-            .width(Length::Fixed(25_f32))
+            .width(Length::Fixed(25_f32)),
     )
-        .padding(4)
-        .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
-        .on_press(message)
-        .into()
+    .padding(4)
+    .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+    .on_press(message)
+    .into()
 }
 
 // pads a usize with spaces

@@ -1,7 +1,7 @@
-use iced::{Color, Element, Event, Length, Point, Rectangle, Size};
 use iced::alignment::Alignment;
 use iced::mouse;
-use iced_native::{Clipboard, event, Layout, layout, overlay, renderer, Shell, Widget, widget};
+use iced::{Color, Element, Event, Length, Point, Rectangle, Size};
+use iced_native::{event, layout, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
 
 // based on the modal example from the iced repository
 
@@ -35,11 +35,10 @@ impl<'a, Message, Renderer> Modal<'a, Message, Renderer> {
     }
 }
 
-impl<'a, Message, Renderer> Widget<Message, Renderer>
-for Modal<'a, Message, Renderer>
-    where
-        Renderer: iced_native::Renderer,
-        Message: Clone,
+impl<'a, Message, Renderer> Widget<Message, Renderer> for Modal<'a, Message, Renderer>
+where
+    Renderer: iced_native::Renderer,
+    Message: Clone,
 {
     fn width(&self) -> Length {
         self.base.as_widget().width()
@@ -49,11 +48,7 @@ for Modal<'a, Message, Renderer>
         self.base.as_widget().height()
     }
 
-    fn layout(
-        &self,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&self, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
         self.base.as_widget().layout(renderer, limits)
     }
 
@@ -96,12 +91,9 @@ for Modal<'a, Message, Renderer>
         renderer: &Renderer,
         operation: &mut dyn widget::Operation<Message>,
     ) {
-        self.base.as_widget().operate(
-            &mut state.children[0],
-            layout,
-            renderer,
-            operation,
-        );
+        self.base
+            .as_widget()
+            .operate(&mut state.children[0], layout, renderer, operation);
     }
 
     fn on_event(
@@ -168,17 +160,12 @@ struct Overlay<'a, 'b, Message, Renderer> {
 }
 
 impl<'a, 'b, Message, Renderer> overlay::Overlay<Message, Renderer>
-for Overlay<'a, 'b, Message, Renderer>
-    where
-        Renderer: iced_native::Renderer,
-        Message: Clone,
+    for Overlay<'a, 'b, Message, Renderer>
+where
+    Renderer: iced_native::Renderer,
+    Message: Clone,
 {
-    fn layout(
-        &self,
-        renderer: &Renderer,
-        _bounds: Size,
-        position: Point,
-    ) -> layout::Node {
+    fn layout(&self, renderer: &Renderer, _bounds: Size, position: Point) -> layout::Node {
         let limits = layout::Limits::new(Size::ZERO, self.size)
             .width(Length::Fill)
             .height(Length::Fill);
@@ -250,10 +237,7 @@ for Overlay<'a, 'b, Message, Renderer>
         let content_bounds = layout.children().next().unwrap().bounds();
 
         if let Some(message) = self.on_blur.as_ref() {
-            if let Event::Mouse(mouse::Event::ButtonPressed(
-                                    mouse::Button::Left,
-                                )) = &event
-            {
+            if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = &event {
                 if !content_bounds.contains(cursor_position) {
                     shell.publish(message.clone());
                     return event::Status::Captured;
@@ -289,11 +273,10 @@ for Overlay<'a, 'b, Message, Renderer>
     }
 }
 
-impl<'a, Message, Renderer> From<Modal<'a, Message, Renderer>>
-for Element<'a, Message, Renderer>
-    where
-        Renderer: 'a + iced_native::Renderer,
-        Message: 'a + Clone,
+impl<'a, Message, Renderer> From<Modal<'a, Message, Renderer>> for Element<'a, Message, Renderer>
+where
+    Renderer: 'a + iced_native::Renderer,
+    Message: 'a + Clone,
 {
     fn from(modal: Modal<'a, Message, Renderer>) -> Self {
         Element::new(modal)
