@@ -1,0 +1,51 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+        override: true
+        components: rustfmt, clippy
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Lint with Clippy
+      run: cargo clippy -- -D warnings
+
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        cargo build --release
+        mv target/release/giga_grabber target/release/giga_grabber_${{ matrix.os }}
+
+    - name: Upload Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-artifact@v2
+      with:
+        name: giga_grabber_${{ matrix.os }}
+        path: target/release/giga_grabber_${{ matrix.os }}
