@@ -38,21 +38,29 @@ jobs:
     - name: Lint with Clippy
       run: cargo clippy -- -D warnings
 
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      env:
-        MATRIX_OS: ${{ matrix.os }}
+    - name: Create Release (Windows)
+      if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
       run: |
         cargo build --release
-        if [[ "$MATRIX_OS" == "windows-latest" ]]; then
-          mv target/release/giga_grabber.exe target/release/giga_grabber_$MATRIX_OS.exe
-        else
-          mv target/release/giga_grabber target/release/giga_grabber_$MATRIX_OS
-        fi
+        mv target/release/giga_grabber.exe target/release/giga_grabber_${{ matrix.os }}.exe
 
-    - name: Upload Release
+    - name: Create Release (Non-Windows)
+      if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'windows-latest'
+      run: |
+        cargo build --release
+        mv target/release/giga_grabber target/release/giga_grabber_${{ matrix.os }}
+
+    - name: Upload Release (Windows)
+      if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
       uses: actions/upload-artifact@v2
       with:
-        name: your_app_name_${{ matrix.os }}
-        path: target/release/your_app_name_${{ matrix.os }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+        name: giga_grabber_${{ matrix.os }}
+        path: target/release/giga_grabber_${{ matrix.os }}.exe
+
+    - name: Upload Release (Non-Windows)
+      if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'windows-latest'
+      uses: actions/upload-artifact@v2
+      with:
+        name: giga_grabber_${{ matrix.os }}
+        path: target/release/giga_grabber_${{ matrix.os }}
 
