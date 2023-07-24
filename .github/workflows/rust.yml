@@ -41,12 +41,14 @@ jobs:
     - name: Create Release (Windows)
       if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
       run: |
+        echo ${{ matrix.os }}
         cargo build --release
         mv target/release/giga_grabber.exe target/release/giga_grabber_${{ matrix.os }}.exe
 
     - name: Create Release (Non-Windows)
       if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'windows-latest'
       run: |
+        echo ${{ matrix.os }}
         cargo build --release
         mv target/release/giga_grabber target/release/giga_grabber_${{ matrix.os }}
 
