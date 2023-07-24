@@ -550,6 +550,11 @@ impl Application for App {
                 // clear the queue
                 while self.download_queue.try_pop().is_some() {}
 
+                // cancel all active downloads
+                for download in self.active_downloads.values() {
+                    download.cancel();
+                }
+
                 self.stop_runner(); // stop the runner
                 self.active_downloads.clear(); // clear active downloads
                 self.queued.store(0, Relaxed); // reset queued counter
@@ -1789,6 +1794,7 @@ fn mega_builder(
                     ProxyMode::None => None::<Url>,
                 }
             }))
+            .timeout(Duration::from_millis(config.timeout))
             .build()
             .unwrap();
 
