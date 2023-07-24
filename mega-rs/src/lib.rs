@@ -910,7 +910,10 @@ impl Client {
                     }
 
                     download.add_downloaded(data.len()); // update download progress
-                    metadata.complete(start).await.unwrap(); // mark section as complete
+                    // mark section as complete
+                    if let Err(error) = metadata.complete(start).await {
+                        errors.push(error);
+                    };
                 }
                 Err(error) => errors.push(error)
             }
