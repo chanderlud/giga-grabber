@@ -33,13 +33,13 @@ type DownloadQueue = Arc<Queue<Download>>;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Eq)]
 enum ProxyMode {
-    /// Use a random proxy from the list
+    // Use a random proxy from the list
     Random,
 
-    /// Use a single proxy
+    // Use a single proxy
     Single,
 
-    /// No proxy
+    // No proxy
     None,
 }
 
@@ -204,17 +204,17 @@ fn main() -> iced::Result {
 }
 
 // background thread that downloads files
-async fn runner(
+fn runner(
     config: Config,
-    mega: Client,
-    queue: DownloadQueue,
-    sender: Arc<UnboundedSender<RunnerMessage>>,
-    queued: Arc<AtomicUsize>,
-) {
-    let active_threads = Arc::new(AtomicUsize::new(0)); // number of active threads
-
-    // create workers, `max_concurrent_files` = number of workers
-    let handles: Vec<JoinHandle<()>> = (0..config.max_concurrent_files)
+    mega: &Client,
+    queue: &DownloadQueue,
+    sender: &Arc<UnboundedSender<RunnerMessage>>,
+    queued: &Arc<AtomicUsize>,
+    active_threads: &Arc<AtomicUsize>,
+    workers: usize,
+) -> Vec<JoinHandle<()>> {
+    // create workers
+    (0..workers)
         .map(|_i| {
             // clone values for thread
             let mega = mega.clone();
@@ -267,12 +267,7 @@ async fn runner(
                 }
             })
         })
-        .collect();
-
-    // wait for all workers to finish
-    for handle in handles {
-        let _ = handle.await;
-    }
+        .collect()
 }
 
 // get the files from a mega folder
