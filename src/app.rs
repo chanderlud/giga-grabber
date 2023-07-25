@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::Read;
 use std::ops::RangeInclusive;
+use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
@@ -27,7 +28,6 @@ use num_traits::cast::ToPrimitive;
 use regex::Regex;
 use reqwest::{Client as HttpClient, Proxy, Url};
 use serde::{Deserialize, Serialize};
-use tokio::spawn;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -55,6 +55,7 @@ const PLAY_ICON: &[u8] = include_bytes!("../assets/play.svg");
 
 const INCONSOLATA_MEDIUM: &[u8] =
     include_bytes!("../assets/Inconsolata/static/Inconsolata-Medium.ttf");
+const CABIN_REGULAR: &[u8] = include_bytes!("../assets/Cabin/static/Cabin-Regular.ttf");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum Theme {
@@ -214,7 +215,7 @@ pub(crate) enum UrlStatus {
 pub(crate) struct App {
     config: Config,
     mega: Client,
-    runner: Option<JoinHandle<()>>,
+    runner: Option<Vec<JoinHandle<()>>>,
     download_queue: DownloadQueue,
     queued: Arc<AtomicUsize>,
     active_downloads: HashMap<String, Download>,
@@ -234,6 +235,7 @@ pub(crate) struct App {
     all_paused: bool,
     bandwidth_counter: usize,
     rebuild_available: bool,
+    active_threads: Arc<AtomicUsize>,
 }
 
 impl Application for App {
@@ -251,7 +253,10 @@ impl Application for App {
 
         // runner is None when not in use
         if self.runner.is_some() {
-            title.push_str(" - downloads active");
+            title.push_str(&format!(
+                " - downloads active - {} threads active",
+                self.active_threads.load(Relaxed)
+            ));
         }
 
         if !self.active_downloads.is_empty() {
@@ -391,13 +396,29 @@ impl Application for App {
                     self.download_queue.push(download);
                 }
 
-                // start runner if needed
-                if self.runner.is_none() {
-                    self.start_runner();
-                } else if let Some(runner) = self.runner.as_ref() {
-                    if runner.is_finished() {
-                        self.start_runner();
+                if let Some(runner_threads) = self.runner.as_ref() {
+                    if runner_threads.iter().all(|thread| thread.is_finished()) {
+                        // all threads are finished, create new runner
+                        self.runner = Some(self.start_runner(self.config.max_concurrent_files));
+                    } else {
+                        // the number of finished threads
+                        let finished = runner_threads
+                            .iter()
+                            .filter(|thread| thread.is_finished())
+                            .count();
+
+                        if finished > 0 {
+                            // there are finished threads, create replacements
+                            let new_threads = self.start_runner(finished);
+
+                            if let Some(mut_threads) = self.runner.as_mut() {
+                                mut_threads.extend(new_threads);
+                            }
+                        }
                     }
+                } else {
+                    // runner doesn't exist, create it
+                    self.runner = Some(self.start_runner(self.config.max_concurrent_files));
                 }
 
                 self.route = Route::Home; // navigate to home
@@ -421,9 +442,7 @@ impl Application for App {
 
                         // if there are no active downloads, abort runner
                         if self.active_downloads.is_empty() {
-                            if let Some(runner) = self.runner.take() {
-                                runner.abort();
-                            }
+                            self.stop_runner();
                         }
                     }
                 }
@@ -437,7 +456,7 @@ impl Application for App {
                         if !self.all_paused {
                             self.error_modal = Some("Out of bandwidth".to_string());
                             Command::perform(async {}, |_| Message::PauseDownloads)
-                        // pause downloads
+                            // pause downloads
                         } else {
                             Command::none()
                         }
@@ -611,17 +630,17 @@ impl Application for App {
             }
             // rebuilds the mega client
             Message::RebuildMega => {
-                if let Some(runner) = &self.runner {
-                    // if the runner is active, we can't rebuild
-                    if runner.is_finished() {
-                        // deletes the inactive runner
-                        self.stop_runner();
-                    } else {
+                if let Some(runner_threads) = &self.runner {
+                    // if any threads are active, we can't rebuild
+                    if runner_threads.iter().any(|thread| !thread.is_finished()) {
                         self.error_modal = Some(
                             "Cannot apply these configuration changes while downloads are active"
                                 .to_string(),
                         );
                         return Command::none();
+                    } else {
+                        // deletes the inactive runner
+                        self.stop_runner();
                     }
                 }
 
@@ -1309,6 +1328,7 @@ impl From<Config> for App {
             all_paused: false,
             bandwidth_counter: 0,
             rebuild_available: false,
+            active_threads: Default::default(),
         }
     }
 }
@@ -1347,12 +1367,12 @@ impl App {
                             } else {
                                 EXPAND_ICON
                             }))
-                            .height(Length::Fixed(18_f32))
-                            .width(Length::Fixed(18_f32)),
+                            .height(Length::Fixed(16_f32))
+                            .width(Length::Fixed(16_f32)),
                         )
                         .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
                         .on_press(Message::ToggleExpanded(file.node.hash().to_string()))
-                        .padding(1),
+                        .padding(3),
                     )
                     .push(
                         text(file.node.name())
@@ -1386,12 +1406,10 @@ impl App {
     }
 
     fn nav_button<'a>(&self, label: &'a str, route: Route, disabled: bool) -> Element<'a, Message> {
-        let style = if self.route == route {
-            styles::svg::SvgIcon::new(Color::from_rgb8(73, 0, 241).into())
-        } else if disabled {
-            styles::svg::SvgIcon::new(Color::from_rgb8(43, 0, 161).into())
+        let style = if disabled {
+            styles::svg::SvgIcon::new(Color::from_rgb8(235, 28, 48).into())
         } else {
-            styles::svg::SvgIcon::new(Color::from_rgb8(53, 0, 211).into())
+            styles::svg::SvgIcon::new(Color::from_rgb8(255, 48, 78).into())
         };
 
         let mut row = Row::new()
@@ -1422,11 +1440,11 @@ impl App {
             .push(
                 container(
                     svg(handle)
-                        .width(Length::Fixed(30_f32))
-                        .height(Length::Fixed(30_f32))
+                        .width(Length::Fixed(28_f32))
+                        .height(Length::Fixed(28_f32))
                         .style(theme::Svg::Custom(Box::new(style))),
                 )
-                .padding(3)
+                .padding(4)
                 .style(theme::Container::Custom(Box::new(
                     styles::container::Icon::new(self.route == route),
                 ))),
@@ -1502,9 +1520,12 @@ impl App {
                 }
                 UrlStatus::Loaded => {
                     row = row.push(
-                        svg(svg::Handle::from_memory(CHECK_ICON))
-                            .width(Length::Fixed(30_f32))
-                            .height(Length::Fixed(30_f32)),
+                        container(
+                            svg(svg::Handle::from_memory(CHECK_ICON))
+                                .width(Length::Fixed(26_f32))
+                                .height(Length::Fixed(26_f32)),
+                        )
+                        .padding(2),
                     );
                 }
             }
@@ -1572,7 +1593,14 @@ impl App {
                     .height(Length::Fill),
             )
             .push(Space::new(Length::Fill, Length::Shrink))
-            .push(pick_list(options, selected, message).width(Length::Fixed(170_f32)))
+            .push(
+                pick_list(options, selected, message)
+                    .width(Length::Fixed(170_f32))
+                    .style(theme::PickList::Custom(
+                        Rc::new(styles::pick_list::PickList),
+                        Rc::new(styles::menu::Menu),
+                    )),
+            )
             .into()
     }
 
@@ -1661,23 +1689,23 @@ impl App {
             .into()
     }
 
-    fn start_runner(&mut self) {
-        let runner = spawn({
-            let queue = self.download_queue.clone();
-            let queued = self.queued.clone();
-            let mega = self.mega.clone();
-            let sender = Arc::clone(&self.runner_sender);
-            let config = self.config.clone();
-
-            runner(config, mega, queue, sender, queued)
-        });
-
-        self.runner = Some(runner);
+    fn start_runner(&self, workers: usize) -> Vec<JoinHandle<()>> {
+        runner(
+            self.config.clone(),
+            &self.mega,
+            &self.download_queue,
+            &self.runner_sender,
+            &self.queued,
+            &self.active_threads,
+            workers,
+        )
     }
 
     fn stop_runner(&mut self) {
-        if let Some(runner) = self.runner.take() {
-            runner.abort();
+        if let Some(runner_threads) = self.runner.take() {
+            for thread in runner_threads {
+                thread.abort();
+            }
         }
     }
 }
@@ -1758,7 +1786,7 @@ pub(crate) fn settings() -> Settings<Config> {
             platform_specific: PlatformSpecific,
         },
         flags: Config::load().expect("failed to load config"), // load config
-        default_font: Some(include_bytes!("../assets/Cabin/static/Cabin-Regular.ttf")),
+        default_font: Some(CABIN_REGULAR),
         default_text_size: 20.0,
         exit_on_close_request: true,
         antialiasing: true,
