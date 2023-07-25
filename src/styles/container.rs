@@ -10,7 +10,7 @@ impl container::StyleSheet for Body {
     fn appearance(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             text_color: Color::from_rgb8(255, 255, 255).into(),
-            background: Color::from_rgb8(28, 28, 28).into(),
+            background: Color::from_rgb8(3, 8, 28).into(),
             border_radius: 0.0,
             border_width: 0.0,
             border_color: Default::default(),
@@ -26,7 +26,7 @@ impl container::StyleSheet for Nav {
     fn appearance(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             text_color: Color::from_rgb8(255, 255, 255).into(),
-            background: Color::from_rgb8(32, 32, 32).into(),
+            background: Color::from_rgb8(50, 50, 66).into(),
             border_radius: 0.0,
             border_width: 0.0,
             border_color: Default::default(),
@@ -42,7 +42,7 @@ impl container::StyleSheet for DownloadList {
     fn appearance(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             text_color: Color::from_rgb8(255, 255, 255).into(),
-            background: Color::from_rgb8(28, 28, 28).into(),
+            background: Color::from_rgb8(3, 8, 28).into(),
             border_radius: 4.0,
             border_width: 2.0,
             border_color: Color::from_rgb8(46, 46, 46),
@@ -61,9 +61,9 @@ impl container::StyleSheet for Download {
         Appearance {
             text_color: Color::from_rgb8(255, 255, 255).into(),
             background: if self.index % 2 != 0 {
-                Color::from_rgb8(52, 52, 52).into()
+                Color::from_rgb8(50, 50, 66).into()
             } else {
-                Color::from_rgb8(28, 28, 28).into()
+                Color::from_rgb8(3, 8, 28).into()
             },
             border_radius: 0.0,
             border_width: 0.0,
@@ -105,7 +105,7 @@ impl container::StyleSheet for Icon {
         Appearance {
             text_color: None,
             background: if self.active {
-                Color::from_rgb8(41, 41, 41).into()
+                Color::from_rgb8(3, 8, 28).into()
             } else {
                 Color::TRANSPARENT.into()
             },

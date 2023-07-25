@@ -10,16 +10,13 @@ impl slider::StyleSheet for Slider {
     fn active(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             rail: Rail {
-                colors: (
-                    Color::from_rgb8(96, 205, 255),
-                    Color::from_rgb8(96, 205, 255),
-                ),
-                width: 8.0,
+                colors: (Color::from_rgb8(255, 48, 78), Color::from_rgb8(255, 48, 78)),
+                width: 8_f32,
             },
             handle: Handle {
-                shape: HandleShape::Circle { radius: 12.0 },
-                color: Color::from_rgb8(96, 205, 255),
-                border_width: 5.0,
+                shape: HandleShape::Circle { radius: 10_f32 },
+                color: Color::from_rgb8(255, 48, 78),
+                border_width: 5_f32,
                 border_color: Color::from_rgb8(69, 69, 69),
             },
         }
@@ -28,16 +25,13 @@ impl slider::StyleSheet for Slider {
     fn hovered(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             rail: Rail {
-                colors: (
-                    Color::from_rgb8(90, 188, 232),
-                    Color::from_rgb8(90, 188, 232),
-                ),
-                width: 8.0,
+                colors: (Color::from_rgb8(255, 68, 98), Color::from_rgb8(255, 68, 98)),
+                width: 8_f32,
             },
             handle: Handle {
-                shape: HandleShape::Circle { radius: 12.0 },
-                color: Color::from_rgb8(94, 192, 236),
-                border_width: 4.0,
+                shape: HandleShape::Circle { radius: 10_f32 },
+                color: Color::from_rgb8(255, 68, 98),
+                border_width: 4_f32,
                 border_color: Color::from_rgb8(69, 69, 69),
             },
         }
@@ -46,16 +40,13 @@ impl slider::StyleSheet for Slider {
     fn dragging(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             rail: Rail {
-                colors: (
-                    Color::from_rgb8(83, 170, 210),
-                    Color::from_rgb8(83, 170, 210),
-                ),
-                width: 8.0,
+                colors: (Color::from_rgb8(235, 28, 58), Color::from_rgb8(235, 28, 58)),
+                width: 8_f32,
             },
             handle: Handle {
-                shape: HandleShape::Circle { radius: 12.0 },
-                color: Color::from_rgb8(91, 178, 218),
-                border_width: 6.0,
+                shape: HandleShape::Circle { radius: 10_f32 },
+                color: Color::from_rgb8(235, 28, 58),
+                border_width: 6_f32,
                 border_color: Color::from_rgb8(69, 69, 69),
             },
         }

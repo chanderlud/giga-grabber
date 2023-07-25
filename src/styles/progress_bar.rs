@@ -10,7 +10,7 @@ impl progress_bar::StyleSheet for ProgressBar {
     fn appearance(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             background: Color::from_rgb8(200, 200, 200).into(),
-            bar: Color::from_rgb8(53, 0, 211).into(),
+            bar: Color::from_rgb8(255, 48, 78).into(),
             border_radius: 8.0,
         }
     }

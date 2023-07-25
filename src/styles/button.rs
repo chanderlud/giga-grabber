@@ -13,7 +13,7 @@ impl button::StyleSheet for Nav {
         Appearance {
             shadow_offset: Default::default(),
             background: if self.active {
-                Color::from_rgb8(76, 76, 76).into()
+                Color::from_rgb8(70, 70, 86).into()
             } else {
                 Color::TRANSPARENT.into()
             },
@@ -28,9 +28,9 @@ impl button::StyleSheet for Nav {
         Appearance {
             shadow_offset: Default::default(),
             background: if self.active {
-                Color::from_rgb8(66, 66, 66).into()
+                Color::from_rgb8(70, 70, 86).into()
             } else {
-                Color::from_rgb8(76, 76, 76).into()
+                Color::from_rgb8(40, 40, 56).into()
             },
             border_radius: 4.0,
             border_width: 0.0,
@@ -59,7 +59,7 @@ impl button::StyleSheet for Button {
     fn active(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             shadow_offset: Default::default(),
-            background: Color::from_rgb8(53, 0, 211).into(),
+            background: Color::from_rgb8(255, 48, 78).into(),
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
@@ -70,7 +70,7 @@ impl button::StyleSheet for Button {
     fn hovered(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             shadow_offset: Default::default(),
-            background: Color::from_rgb8(73, 0, 231).into(),
+            background: Color::from_rgb8(255, 68, 98).into(),
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
@@ -87,22 +87,22 @@ impl button::StyleSheet for WarningButton {
     fn active(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             shadow_offset: Default::default(),
-            background: Color::from_rgb8(205, 69, 0).into(),
+            background: Color::from_rgb8(255, 191, 83).into(),
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255, 255),
+            text_color: Color::from_rgb8(3, 8, 28),
         }
     }
 
     fn hovered(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             shadow_offset: Default::default(),
-            background: Color::from_rgb8(255, 69, 0).into(),
+            background: Color::from_rgb8(255, 201, 103).into(),
             border_radius: 4.0,
             border_width: 0.0,
             border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255, 255),
+            text_color: Color::from_rgb8(3, 8, 28),
         }
     }
 }

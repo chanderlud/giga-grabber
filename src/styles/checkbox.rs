@@ -10,9 +10,9 @@ impl checkbox::StyleSheet for Checkbox {
     fn active(&self, _style: &Self::Style, is_checked: bool) -> Appearance {
         Appearance {
             background: if is_checked {
-                Color::from_rgb8(53, 0, 211).into()
+                Color::from_rgb8(255, 48, 78).into()
             } else {
-                Color::from_rgb8(73, 0, 231).into()
+                Color::from_rgb8(255, 68, 98).into()
             },
             icon_color: Color::from_rgb8(255, 255, 255),
             border_radius: 4.0,
@@ -25,9 +25,9 @@ impl checkbox::StyleSheet for Checkbox {
     fn hovered(&self, _style: &Self::Style, is_checked: bool) -> Appearance {
         Appearance {
             background: if is_checked {
-                Color::from_rgb8(73, 0, 231).into()
+                Color::from_rgb8(255, 68, 98).into()
             } else {
-                Color::from_rgb8(53, 0, 211).into()
+                Color::from_rgb8(255, 48, 78).into()
             },
             icon_color: Color::from_rgb8(220, 220, 220),
             border_radius: 4.0,

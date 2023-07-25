@@ -13,7 +13,7 @@ impl text_input::StyleSheet for UrlInput {
 
     fn active(&self, _style: &Self::Style) -> Appearance {
         Appearance {
-            background: Color::from_rgb8(41, 41, 41).into(),
+            background: Color::from_rgb8(30, 30, 46).into(),
             border_radius: 4.0,
             border_width: 2.0,
             border_color: match self.mode {
@@ -26,7 +26,7 @@ impl text_input::StyleSheet for UrlInput {
 
     fn focused(&self, _style: &Self::Style) -> Appearance {
         Appearance {
-            background: Color::from_rgb8(34, 34, 34).into(),
+            background: Color::from_rgb8(20, 20, 36).into(),
             border_radius: 4.0,
             border_width: 2.0,
             border_color: match self.mode {
@@ -55,7 +55,7 @@ impl text_input::StyleSheet for UrlInput {
 
     fn disabled(&self, _style: &Self::Style) -> Appearance {
         Appearance {
-            background: Color::from_rgb8(38, 38, 38).into(),
+            background: Color::from_rgb8(20, 20, 30).into(),
             border_radius: 4.0,
             border_width: 2.0,
             border_color: match self.mode {

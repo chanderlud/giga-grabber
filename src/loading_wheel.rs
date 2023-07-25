@@ -87,7 +87,7 @@ impl Program<Message> for LoadingWheel {
                 circle.radius,
             );
             // fill the path with a color
-            frame.fill(&path, Fill::from(Color::from_rgb8(53, 0, 211)));
+            frame.fill(&path, Fill::from(Color::from_rgb8(255, 48, 78)));
         }
 
         vec![frame.into_geometry()]
