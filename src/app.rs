@@ -1671,7 +1671,7 @@ impl App {
             column = column.push(
                 text_input(
                     "Proxy url",
-                    self.config.proxies.get(0).unwrap_or(&String::new()),
+                    self.config.proxies.first().unwrap_or(&String::new()),
                 )
                 .on_input(Message::ProxyUrlChanged)
                 .style(theme::TextInput::Custom(Box::new(
