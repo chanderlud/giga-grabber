@@ -128,9 +128,9 @@ pub(crate) enum Message {
     // user added files to download queue
     AddFiles,
     // received message from runner
-    RunnerMessage(RunnerMessage),
+    Runner(RunnerMessage),
     // received message from mega client
-    MegaMessage(MegaError),
+    Mega(MegaError),
     // navigate to a different route
     Navigate(Route),
     // toggle file & children for download
@@ -425,7 +425,7 @@ impl Application for App {
                 Command::perform(async {}, |_| Message::ClearFiles) // clear files
             }
             // a download has either been started or stopped
-            Message::RunnerMessage(message) => {
+            Message::Runner(message) => {
                 match message {
                     RunnerMessage::Start(download) => {
                         // add download to active downloads
@@ -450,7 +450,7 @@ impl Application for App {
                 Command::none()
             }
             // a message (error) from the mega backend
-            Message::MegaMessage(error) => {
+            Message::Mega(error) => {
                 match error {
                     MegaError::OutOfBandwidth => {
                         if !self.all_paused {
@@ -1268,7 +1268,7 @@ impl Application for App {
             self.runner_receiver.take(),
             move |mut receiver| async move {
                 let message = receiver.as_mut().unwrap().recv().await.unwrap();
-                (Message::RunnerMessage(message), receiver)
+                (Message::Runner(message), receiver)
             },
         );
 
@@ -1278,7 +1278,7 @@ impl Application for App {
             self.mega_receiver.take(),
             move |mut receiver| async move {
                 let message = receiver.as_mut().unwrap().recv().await.unwrap();
-                (Message::MegaMessage(message.into()), receiver)
+                (Message::Mega(message.into()), receiver)
             },
         );
 
