@@ -32,6 +32,10 @@ jobs:
     - name: Build
       run: cargo build --verbose
 
+    - name: Install Dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: sudo apt install libfontconfig1-dev
+
     - name: Check formatting
       run: cargo fmt -- --check
 
