@@ -54,14 +54,14 @@ jobs:
 
     - name: Upload Release (Windows)
       if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: giga_grabber_${{ matrix.os }}
         path: target/release/giga_grabber_${{ matrix.os }}.exe
 
     - name: Upload Release (Non-Windows)
       if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'windows-latest'
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: giga_grabber_${{ matrix.os }}
         path: target/release/giga_grabber_${{ matrix.os }}
