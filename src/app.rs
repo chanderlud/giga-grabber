@@ -1322,7 +1322,7 @@ impl From<Config> for App {
             expanded_files: HashMap::new(),
             route: Route::Home,
             url_regex: Regex::new("https?://mega\\.nz/(folder|file)/([\\dA-Za-z]+)#([\\dA-Za-z-_]+)").unwrap(),
-            proxy_regex: Regex::new("(?:(?:https?|socks5h?)://)(?:(?:[a-z\\d]+(?::[a-z\\d]+)?@)?)(?:(?:[a-z\\d](?:[a-z\\d\\-]{0,61}[a-z\\d])?\\.)+[a-z\\d][a-z\\d\\-]{0,61}[a-z\\d]|(?:\\d{1,3}\\.){3}\\d{1,3})(:\\d{1,5})").unwrap(),
+            proxy_regex: Regex::new("(?:(?:https?|socks5h?)://)(?:(?:[a-zA-Z\\d]+(?::[a-zA-Z\\d]+)?@)?)(?:(?:[a-z\\d](?:[a-z\\d\\-]{0,61}[a-z\\d])?\\.)+[a-z\\d][a-z\\d\\-]{0,61}[a-z\\d]|(?:\\d{1,3}\\.){3}\\d{1,3})(:\\d{1,5})").unwrap(),
             errors: Vec::new(),
             error_modal: None,
             all_paused: false,
