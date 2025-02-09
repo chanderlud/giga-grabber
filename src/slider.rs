@@ -74,8 +74,8 @@ where
     ///   * an inclusive range of possible values
     ///   * the current value of the [`Slider`]
     ///   * a function that will be called when the [`Slider`] is dragged.
-    ///   It receives the new value of the [`Slider`] and must produce a
-    ///   `Message`.
+    ///     It receives the new value of the [`Slider`] and must produce a
+    ///     `Message`.
     pub fn new<F>(range: RangeInclusive<T>, value: T, on_change: F) -> Self
     where
         F: 'a + Fn(T) -> Message,
@@ -140,7 +140,7 @@ where
     }
 }
 
-impl<'a, T, Message, Renderer> Widget<Message, Renderer> for Slider<'a, T, Message, Renderer>
+impl<T, Message, Renderer> Widget<Message, Renderer> for Slider<'_, T, Message, Renderer>
 where
     T: Copy + Into<f64> + num_traits::FromPrimitive,
     Message: Clone,
@@ -285,7 +285,7 @@ where
         };
 
         if ((*value).into() - new_value.into()).abs() > f64::EPSILON {
-            shell.publish((on_change)(new_value));
+            shell.publish(on_change(new_value));
 
             *value = new_value;
         }

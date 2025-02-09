@@ -134,7 +134,7 @@ pub(crate) enum Message {
     // navigate to a different route
     Navigate(Route),
     // toggle file & children for download
-    ToggleFile((bool, MegaFile)),
+    ToggleFile(Box<(bool, MegaFile)>),
     // when a character is changed in the url input
     UrlInput((usize, String)),
     // toggle expanded state of file tree
@@ -484,15 +484,15 @@ impl Application for App {
                 Command::none()
             }
             // toggle whether a file should be downloaded
-            Message::ToggleFile((checked, file)) => {
+            Message::ToggleFile(item) => {
                 // insert an entry for the file in the filter
                 self.file_filter
-                    .insert(file.node.hash().to_string(), checked);
+                    .insert(item.1.node.hash().to_string(), item.0);
 
-                // all children of the file should be have the same entry in the filter
-                file.iter().for_each(|file| {
+                // all children of the file should have the same entry in the filter
+                item.1.iter().for_each(|file| {
                     self.file_filter
-                        .insert(file.node.hash().to_string(), checked);
+                        .insert(file.node.hash().to_string(), item.0);
                 });
 
                 Command::none()
@@ -1347,7 +1347,7 @@ impl App {
                     checkbox(
                         "",
                         *self.file_filter.get(file.node.hash()).unwrap_or(&true),
-                        |value| Message::ToggleFile((value, file.clone())),
+                        |value| Message::ToggleFile(Box::new((value, file.clone()))),
                     )
                     .style(theme::Checkbox::Custom(Box::new(
                         styles::checkbox::Checkbox,
@@ -1383,7 +1383,7 @@ impl App {
                         checkbox(
                             "",
                             *self.file_filter.get(file.node.hash()).unwrap_or(&true),
-                            |value| Message::ToggleFile((value, file.clone())),
+                            |value| Message::ToggleFile(Box::new((value, file.clone()))),
                         )
                         .style(theme::Checkbox::Custom(Box::new(
                             styles::checkbox::Checkbox,
@@ -1839,7 +1839,7 @@ fn mega_builder(
 }
 
 // build an icon button
-fn icon_button(icon: &'static [u8], message: Message) -> Element<Message> {
+fn icon_button(icon: &'static [u8], message: Message) -> Element<'static, Message> {
     button(
         svg(svg::Handle::from_memory(icon))
             .height(Length::Fixed(25_f32))

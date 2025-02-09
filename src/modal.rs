@@ -35,7 +35,7 @@ impl<'a, Message, Renderer> Modal<'a, Message, Renderer> {
     }
 }
 
-impl<'a, Message, Renderer> Widget<Message, Renderer> for Modal<'a, Message, Renderer>
+impl<Message, Renderer> Widget<Message, Renderer> for Modal<'_, Message, Renderer>
 where
     Renderer: iced_native::Renderer,
     Message: Clone,
@@ -159,8 +159,7 @@ struct Overlay<'a, 'b, Message, Renderer> {
     on_blur: Option<Message>,
 }
 
-impl<'a, 'b, Message, Renderer> overlay::Overlay<Message, Renderer>
-    for Overlay<'a, 'b, Message, Renderer>
+impl<Message, Renderer> overlay::Overlay<Message, Renderer> for Overlay<'_, '_, Message, Renderer>
 where
     Renderer: iced_native::Renderer,
     Message: Clone,
