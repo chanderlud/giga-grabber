@@ -12,11 +12,11 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # (De)serialization
-json = { version = "1.0.93", package = "serde_json" }
-serde = { version = "1.0.152", features = ["derive"] }
+json = { version = "1", package = "serde_json" }
+serde = { version = "1", features = ["derive"] }
 bincode = "1.3.3"
 serde_repr = "0.1.10"
-base64 = "0.21.0"
+base64 = "0.22"
 
 # Async helpers
 async-trait = "0.1.64"
@@ -28,7 +28,7 @@ thiserror = "1.0.38"
 
 # Miscellaneous
 url = "2.3.1"
-rand = "0.8.5"
+rand = "0.8"
 chrono = "0.4.23"
 dyn-clone = "1.0.11"
 
@@ -41,9 +41,9 @@ cipher = { version = "0.4.3", features = ["block-padding"] }
 pbkdf2 = { version = "0.11.0", features = ["std"] }
 
 # `reqwest` support
-reqwest = { version = "0.11.14", features = ["json", "stream"], optional = true }
-tokio = { version = "1.25.0", features = ["time"], optional = true }
-tokio-util = { version = "0.7.7", features = ["compat", "codec"], optional = true }
+reqwest = { version = "0.12", features = ["json", "stream"], optional = true }
+tokio = { version = "1", features = ["time"], optional = true }
+tokio-util = { version = "0.7", features = ["compat", "codec"], optional = true }
 
 [features]
 default = ["reqwest"]
