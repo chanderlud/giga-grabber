@@ -237,10 +237,11 @@ where
 
         if let Some(message) = self.on_blur.as_ref()
             && let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = &event
-                && !content_bounds.contains(cursor_position) {
-                    shell.publish(message.clone());
-                    return event::Status::Captured;
-                }
+            && !content_bounds.contains(cursor_position)
+        {
+            shell.publish(message.clone());
+            return event::Status::Captured;
+        }
 
         self.content.as_widget_mut().on_event(
             self.tree,

@@ -1,33 +1,40 @@
-use crate::config::Config;
+use crate::Download;
 use aes::Aes128;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cbc::Decryptor;
 use cipher::KeyInit;
+use cipher::StreamCipherSeek;
 use cipher::{BlockDecrypt, BlockDecryptMut, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
+use futures::StreamExt;
+use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::{fs, select};
 use url::Url;
-use futures::StreamExt;
 
-/// MEGA API origin.
+/// MEGA API origin
 const DEFAULT_API_ORIGIN: &str = "https://g.api.mega.co.nz/";
+/// safety margin for resuming partial downloads
+const RESUME_REWIND: u64 = 1024 * 1024;
 
-/// File node vs folder node.
+/// File node vs folder node
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NodeKind {
     File,
     Folder,
 }
 
-/// A single node in a public tree.
+/// A single node in a public tree
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
     pub(crate) name: String,
@@ -40,35 +47,33 @@ pub(crate) struct Node {
     pub(crate) root_handle: String,
 }
 
-/// What kind of public link this is.
+/// What kind of public link this is
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublicLinkKind {
     File,
     Folder,
 }
 
-/// Struct used internally for URL parsing.
+/// Struct used internally for URL parsing
 struct ParsedPublicLink {
     kind: PublicLinkKind,
     node_id: String,
     node_key: Vec<u8>,
 }
 
-/// Minimal MEGA client, using just `reqwest`.
+/// Minimal MEGA client, using just `reqwest`
 #[derive(Clone)]
 pub(crate) struct MegaClient {
     http: reqwest::Client,
-    config: Config, // TODO use config for retries and timeouts inside download method
     origin: Url,
     id_counter: Arc<AtomicU64>,
 }
 
 impl MegaClient {
-    pub(crate) fn new(http: reqwest::Client, config: Config) -> Result<Self> {
+    pub(crate) fn new(http: reqwest::Client) -> Result<Self> {
         let origin = Url::parse(DEFAULT_API_ORIGIN)?;
         Ok(Self {
             http,
-            config,
             origin,
             id_counter: Default::default(),
         })
@@ -78,7 +83,7 @@ impl MegaClient {
         self.id_counter.fetch_add(1, Ordering::SeqCst)
     }
 
-    /// Fetch all nodes from a MEGA public link (file or folder).
+    /// Fetch all nodes from a MEGA public link (file or folder)
     ///
     /// Supported formats:
     /// - https://mega.nz/file/{node_id}#{node_key}
@@ -92,50 +97,120 @@ impl MegaClient {
         }
     }
 
-    // TODO use chunking & save metadata
-    /// Download a single node to `dest_path`.
-    pub(crate) async fn download_file(&self, node: &Node, dest_path: &Path) -> Result<()> {
-        let (download_url, _size) = self.get_download_url(&node.root_handle, node).await?;
+    /// Download a single node to `dest_path`
+    pub(crate) async fn download_file(
+        &self,
+        download: &Download,
+        dest_path: &Path,
+    ) -> Result<bool> {
+        let (download_url, remote_size) = self.get_download_url(&download.node).await?;
 
-        let resp = self
-            .http
-            .get(&download_url)
-            .send()
-            .await
-            .context("MEGA file download request failed")?
-            .error_for_status()
-            .context("MEGA file download HTTP error")?;
+        // figure out resume offset & open file accordingly
+        let (mut file, resume_from) = if dest_path.exists() {
+            let meta = fs::metadata(dest_path)
+                .await
+                .with_context(|| format!("stat {:?}", dest_path))?;
+            let local_len = meta.len();
+
+            if local_len == 0 {
+                // file exists but is empty: just start from 0
+                (
+                    fs::File::create(dest_path)
+                        .await
+                        .with_context(|| format!("creating {:?}", dest_path))?,
+                    0,
+                )
+            } else if local_len >= remote_size {
+                // already complete or bigger than the remote size; assume done
+                return Ok(true);
+            } else {
+                // resume with some rewind.
+                let resume_from = local_len.saturating_sub(RESUME_REWIND);
+
+                let mut f = OpenOptions::new()
+                    .write(true)
+                    .open(dest_path)
+                    .await
+                    .with_context(|| format!("opening for resume {:?}", dest_path))?;
+
+                // overwrite from resume_from onward (not append)
+                f.seek(SeekFrom::Start(resume_from))
+                    .await
+                    .with_context(|| format!("seeking {:?}", dest_path))?;
+
+                (f, resume_from)
+            }
+        } else {
+            (
+                fs::File::create(dest_path)
+                    .await
+                    .with_context(|| format!("creating {:?}", dest_path))?,
+                0,
+            )
+        };
+
+        // fetch the download response, handling pausing
+        let mut req = self.http.get(&download_url);
+        if resume_from > 0 {
+            let range_header = format!("bytes={}-", resume_from);
+            req = req.header(header::RANGE, range_header);
+        }
+
+        let resp = select! {
+            result = req.send() => {
+                result
+                    .context("MEGA file download request failed")?
+                    .error_for_status()
+                    .context("MEGA file download HTTP error")?
+            }
+            _ = download.pause.notified() => {
+                // the download is paused now
+                download.paused.store(true, Relaxed);
+                return Ok(false);
+            }
+        };
 
         let mut stream = resp.bytes_stream();
 
-        let mut file = fs::File::create(dest_path)
-            .await
-            .with_context(|| format!("creating {:?}", dest_path))?;
-
         // Build AES-CTR cipher
         let mut iv_block = [0u8; 16];
-        if let Some(iv8) = node.aes_iv {
+        if let Some(iv8) = download.node.aes_iv {
             iv_block[..8].copy_from_slice(&iv8);
         }
-        let mut ctr = Ctr128BE::<Aes128>::new((&node.aes_key).into(), (&iv_block).into());
+        let mut ctr = Ctr128BE::<Aes128>::new((&download.node.aes_key).into(), (&iv_block).into());
+        ctr.seek(resume_from);
 
-        while let Some(chunk) = stream.next().await {
-            let mut buf = chunk.context("error reading download stream")?.to_vec();
-            ctr.apply_keystream(&mut buf);
-            file.write_all(&buf).await?;
+        loop {
+            select! {
+                _ = download.pause.notified() => {
+                    // the download is paused now
+                    download.paused.store(true, Relaxed);
+                    return Ok(false);
+                }
+                chunk_option = stream.next() => {
+                    if let Some(chunk) = chunk_option {
+                        let mut buf = chunk?.to_vec();
+                        ctr.apply_keystream(&mut buf);
+                        file.write_all(&buf).await?;
+                        download.downloaded.fetch_add(buf.len(), Relaxed);
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
 
         file.flush().await?;
-        Ok(())
+        Ok(true)
     }
 
-    /// Call the MEGA `g` (download) command and return the URL.
-    async fn get_download_url(&self, root_handle: &str, node: &Node) -> Result<(String, u64)> {
+    /// Call the MEGA `g` (download) command and return the URL
+    async fn get_download_url(&self, node: &Node) -> Result<(String, u64)> {
         let url = {
             let mut url = self.origin.join("cs")?;
             let mut qp = url.query_pairs_mut();
             qp.append_pair("id", self.next_request_id().to_string().as_str());
-            qp.append_pair("n", root_handle);
+            qp.append_pair("n", &node.root_handle);
             drop(qp);
             url
         };
@@ -402,16 +477,17 @@ impl MegaClient {
         let handles: HashSet<String> = nodes_map.keys().cloned().collect();
         for node in nodes_map.values_mut() {
             if let Some(ref p) = node.parent
-                && !handles.contains(p) {
-                    node.parent = None;
-                }
+                && !handles.contains(p)
+            {
+                node.parent = None;
+            }
         }
 
         Ok(nodes_map)
     }
 }
 
-/// Internal request enum for MEGA `cs` calls.
+/// Internal request enum for MEGA `cs` calls
 #[derive(Debug, Serialize)]
 #[serde(tag = "a")]
 enum ApiRequest {
@@ -438,14 +514,14 @@ enum ApiRequest {
     },
 }
 
-/// Minimal subset of MEGA's node attributes.
+/// Minimal subset of MEGA's node attributes
 #[derive(Debug, Deserialize)]
 struct NodeAttributes {
     #[serde(rename = "n")]
     name: String,
 }
 
-/// Single node entry from FetchNodes.
+/// Single node entry from FetchNodes
 #[derive(Debug, Deserialize)]
 struct FileNode {
     #[serde(rename = "t")]
@@ -462,14 +538,14 @@ struct FileNode {
     size: Option<u64>,
 }
 
-/// Response for FetchNodes.
+/// Response for FetchNodes
 #[derive(Debug, Deserialize)]
 struct FetchNodesResponse {
     #[serde(rename = "f")]
     nodes: Vec<FileNode>,
 }
 
-/// Response for Download.
+/// Response for Download
 #[derive(Debug, Deserialize)]
 struct DownloadResponse {
     #[serde(rename = "g")]
@@ -480,7 +556,7 @@ struct DownloadResponse {
     attr: String,
 }
 
-/// Parse public MEGA link: file/folder, node id, raw key bytes.
+/// Parse public MEGA link: file/folder, node id, raw key bytes
 fn parse_public_link(url: &str) -> Result<ParsedPublicLink> {
     const PREFIX: &str = "https://mega.nz/";
     if !url.starts_with(PREFIX) {
@@ -512,7 +588,7 @@ fn parse_public_link(url: &str) -> Result<ParsedPublicLink> {
     })
 }
 
-/// AES-ECB decrypt `data` in-place using `key`.
+/// AES-ECB decrypt `data` in-place using `key`
 fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
     let aes = Aes128::new(key.into());
     for block in data.chunks_mut(16) {
@@ -520,7 +596,7 @@ fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
     }
 }
 
-/// XOR first 16 bytes with second 16 bytes (undo merged key+MAC).
+/// XOR first 16 bytes with second 16 bytes (undo merged key+MAC)
 fn unmerge_key_mac(key: &mut [u8]) {
     let (fst, snd) = key.split_at_mut(16);
     for (a, b) in fst.iter_mut().zip(snd) {
@@ -528,7 +604,7 @@ fn unmerge_key_mac(key: &mut [u8]) {
     }
 }
 
-/// Decrypt MEGA node attributes and return the node name.
+/// Decrypt MEGA node attributes and return the node name
 fn decrypt_attrs(aes_key: &[u8; 16], attr_b64: &str) -> Result<String> {
     let mut buf = URL_SAFE_NO_PAD
         .decode(attr_b64)

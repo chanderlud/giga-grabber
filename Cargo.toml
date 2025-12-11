@@ -28,6 +28,8 @@ url = "2"
 anyhow = "1"
 kanal = "0.1"
 log = "0.4"
+simple-logging = "2"
+log-panics = "2"
 
 [profile.release]
 opt-level = 3

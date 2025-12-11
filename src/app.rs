@@ -6,6 +6,7 @@ use crate::slider::Slider;
 use crate::{
     Download, MegaFile, ProxyMode, RunnerMessage, WorkerHandle, get_files, spawn_workers, styles,
 };
+use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
 use iced::time::every;
 use iced::widget::{Column, Row, Space, Text, canvas, svg};
@@ -18,6 +19,7 @@ use iced_native::widget::scrollable::Properties;
 use iced_native::widget::{
     button, checkbox, container, pick_list, progress_bar, scrollable, text, text_input,
 };
+use log::error;
 use native_dialog::FileDialog;
 use num_traits::cast::ToPrimitive;
 use regex::Regex;
@@ -337,19 +339,14 @@ impl Application for App {
             // add loaded files to download queue
             Message::AddFiles => {
                 // flatten file structure into a list of downloads
-                let downloads = self
+                let downloads: Vec<Download> = self
                     .files
                     .iter()
                     .flat_map(|file| file.iter())
-                    .filter(|file| {
-                        if let Some(download) = self.file_filter.get(&file.node.handle) {
-                            *download && file.node.kind == NodeKind::File
-                        } else {
-                            file.node.kind == NodeKind::File
-                        }
-                    }) // only download files that are marked for download
-                    .map(|file| file.clone().into()) // convert MegaFile into Download
-                    .collect::<Vec<Download>>();
+                    .filter(|f| f.node.kind == NodeKind::File)
+                    .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
+                    .map(Download::new)
+                    .collect();
 
                 // add downloads to queue
                 for download in downloads {
@@ -357,7 +354,7 @@ impl Application for App {
                 }
 
                 if self.worker.is_none() {
-                    self.worker = Some(self.start_runner(self.config.max_concurrent_files));
+                    self.worker = Some(self.start_workers(self.config.max_workers));
                 }
 
                 self.route = Route::Home; // navigate to home
@@ -371,7 +368,7 @@ impl Application for App {
                         self.active_downloads
                             .insert(download.node.handle.clone(), download);
                     }
-                    RunnerMessage::Finished(id) => {
+                    RunnerMessage::Inactive(id) => {
                         // add downloaded bytes to bandwidth counter
                         if let Some(download) = self.active_downloads.get(&id) {
                             self.bandwidth_counter += download.downloaded.load(Relaxed);
@@ -379,13 +376,13 @@ impl Application for App {
 
                         self.active_downloads.remove(&id); // remove download from active downloads
 
-                        // if there are no active downloads, abort runner
+                        // if there are no active downloads, stop the runner
                         if self.active_downloads.is_empty() && self.download_receiver.is_empty() {
-                            self.stop_runner();
+                            self.stop_workers();
                         }
                     }
                     RunnerMessage::Error(error) => {
-
+                        self.errors.push(error);
                     }
                 }
 
@@ -500,84 +497,61 @@ impl Application for App {
                 self.error_modal = None;
                 Command::none()
             }
-            // cancels all downloads
             Message::CancelDownloads => {
+                // stop the workers
+                self.stop_workers();
                 // clear the queue
                 while let Ok(Some(download)) = self.download_receiver.try_recv() {
                     download.cancel();
                 }
-
                 // cancel all active downloads
                 for (_, download) in self.active_downloads.drain() {
                     download.cancel();
                 }
-
-                self.stop_runner(); // stop the runner
-
                 Command::none()
             }
-            // cancels a download
             Message::CancelDownload(id) => {
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.cancel();
                 }
-
                 Command::none()
             }
-            // pauses all downloads
             Message::PauseDownloads => {
-                self.all_paused = true; // set all paused flag for gui purposes
-
+                self.all_paused = true; // set all paused flag for UI purposes
                 // pause each active download
                 for (_, download) in self.active_downloads.iter() {
                     download.pause();
                 }
-
                 Command::none()
             }
-            // pauses a download
             Message::PauseDownload(id) => {
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.pause();
                 }
-
                 Command::none()
             }
-            // resumes all downloads
             Message::ResumeDownloads => {
-                self.all_paused = false; // unset all paused flag for gui purposes
-
-                // resume each active (paused?) download
+                self.all_paused = false;
                 for (_, download) in self.active_downloads.iter() {
                     download.resume();
                 }
-
                 Command::none()
             }
-            // resumes a download
             Message::ResumeDownload(id) => {
                 self.all_paused = false; // all downloads can't be paused if we're resuming one
-
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.resume();
                 }
-
                 Command::none()
             }
-            // rebuilds the mega client
             Message::RebuildMega => {
-                if let Some(workers) = self.worker.as_ref().map(|w| &w.handles) {
-                    // if any threads are active, we can't rebuild
-                    if workers.iter().any(|w| !w.is_finished()) {
-                        self.error_modal = Some(
-                            "Cannot apply these configuration changes while downloads are active"
-                                .to_string(),
-                        );
-                        return Command::none();
-                    } else {
-                        // deletes the inactive runner
-                        self.stop_runner();
-                    }
+                // if the worker is active, do not rebuild
+                if self.worker.is_some() {
+                    self.error_modal = Some(
+                        "Cannot apply these configuration changes while downloads are active"
+                            .to_string(),
+                    );
+                    return Command::none();
                 }
 
                 // build a new mega client
@@ -588,72 +562,55 @@ impl Application for App {
                         Command::perform(async {}, |_| Message::SaveConfig) // save the config
                     }
                     Err(error) => {
-                        // show error modal
                         self.error_modal = Some(format!("Failed to build mega client: {}", error));
                         Command::none()
                     }
                 }
             }
-            // a settings slider has been moved
             Message::SettingsSlider((index, value)) => {
-                self.rebuild_available = true; // there are changes that can be applied now
-
                 // update the config
                 match index {
                     0 => {
                         if let Some(value) = value.to_usize() {
-                            self.config.max_threads = value;
-
-                            if self.config.max_threads_per_file > value {
-                                self.config.max_threads_per_file = value;
-                            }
-
-                            if self.config.max_concurrent_files > value {
-                                self.config.max_concurrent_files = value;
-                            }
+                            self.config.max_workers = value;
                         }
                     }
                     1 => {
                         if let Some(value) = value.to_usize() {
-                            self.config.max_concurrent_files = value;
+                            self.config.concurrency_budget = value;
                         }
                     }
                     2 => {
-                        if let Some(value) = value.to_usize() {
-                            self.config.max_threads_per_file = value;
+                        if let Some(value) = value.to_u64() {
+                            self.config.timeout = Duration::from_millis(value);
                         }
                     }
                     3 => {
-                        if let Some(value) = value.to_u64() {
-                            self.config.timeout = value;
+                        if let Some(value) = value.to_u32() {
+                            self.config.max_retries = value;
                         }
                     }
                     4 => {
-                        if let Some(value) = value.to_usize() {
-                            self.config.max_retries = value;
+                        if let Some(value) = value.to_u64() {
+                            self.config.min_retry_delay = Duration::from_millis(value);
                         }
                     }
                     5 => {
                         if let Some(value) = value.to_u64() {
-                            self.config.min_retry_delay = value;
-                        }
-                    }
-                    6 => {
-                        if let Some(value) = value.to_u64() {
-                            self.config.max_retry_delay = value;
+                            self.config.max_retry_delay = Duration::from_millis(value);
                         }
                     }
                     _ => unreachable!(),
                 }
 
+                self.rebuild_available = true; // there are changes that can be applied now
                 Command::none()
             }
-            // save the config
             Message::SaveConfig => {
-                // TODO should something else happen if a proxy is invalid?
                 for proxy in &self.config.proxies {
                     if !self.proxy_regex.is_match(proxy) {
                         self.error_modal = Some(format!("Invalid proxy url: {}", proxy));
+                        return Command::none();
                     }
                 }
 
@@ -664,29 +621,23 @@ impl Application for App {
 
                 Command::none()
             }
-            // reset the config to default values
             Message::ResetConfig => {
                 self.config = Config::default();
-
                 Command::none()
             }
-            // the theme has been changed
             Message::ThemeChanged(theme) => {
                 self.config.theme = theme;
                 Command::none()
             }
-            // the proxy mode has been changed
             Message::ProxyModeChanged(proxy_mode) => {
                 if proxy_mode == ProxyMode::Single {
                     // if we're switching to single proxy mode, truncate the proxy list to 1
                     self.config.proxies.truncate(1);
                 }
-
                 self.config.proxy_mode = proxy_mode; // update the config
                 self.rebuild_available = true; // there are changes that can be applied now
                 Command::none()
             }
-            // the proxy url has been changed
             Message::ProxyUrlChanged(value) => {
                 if let Some(proxy_url) = self.config.proxies.get_mut(0) {
                     // update the proxy url
@@ -695,12 +646,9 @@ impl Application for App {
                     // if there is no proxy url, add value to the proxy list
                     self.config.proxies.push(value);
                 }
-
                 self.rebuild_available = true; // there are changes that can be applied now
-
                 Command::none()
             }
-            // add proxies from file
             Message::AddProxies => {
                 if let Ok(Some(file_path)) = FileDialog::new()
                     .add_filter("Text File", &["txt"])
@@ -725,30 +673,20 @@ impl Application for App {
 
                 Command::none()
             }
-            // remove a proxy by index
             Message::RemoveProxy(index) => {
                 self.config.proxies.remove(index); // remove the proxy
                 self.rebuild_available = true; // there are changes that can be applied now
                 Command::none()
             }
-            // clear files that have been loaded for selection but not added to runner
             Message::ClearFiles => {
                 self.files.clear(); // clear files
                 self.file_filter.clear(); // clear file filter
 
-                // get keys of loaded url inputs
-                let keys: Vec<_> = self
+                // clear loaded URL inputs
+                self
                     .url_input
                     .data
-                    .iter()
-                    .filter(|(_, input)| input.status == UrlStatus::Loaded)
-                    .map(|(index, _)| *index)
-                    .collect();
-
-                // remove inputs
-                for key in keys {
-                    self.url_input.remove(key);
-                }
+                    .retain(|_, input| input.status != UrlStatus::Loaded);
 
                 // navigate to import if still on choose files
                 if self.route == Route::ChooseFiles {
@@ -966,15 +904,10 @@ impl Application for App {
                     .files
                     .iter()
                     .flat_map(|file| file.iter())
-                    .filter(|file| {
-                        if let Some(download) = self.file_filter.get(&file.node.handle) {
-                            *download && file.node.kind == NodeKind::File
-                        } else {
-                            file.node.kind == NodeKind::File
-                        }
-                    }) // only count files that are marked for download
-                    .map(|file| file.node.size) // get the size of every file
-                    .sum(); // sum the sizes
+                    .filter(|f| f.node.kind == NodeKind::File)
+                    .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
+                    .map(|file| file.node.size)
+                    .sum();
 
                 for file in &self.files {
                     column = column.push(self.recursive_files(file));
@@ -1032,51 +965,43 @@ impl Application for App {
                     apply_button = apply_button.on_press(Message::RebuildMega);
                 }
 
-                // TODO max threads per should be divisible by max threads per file && max concurrent files
-
                 container(
                     Column::new()
                         .width(Length::Fixed(350_f32))
                         .push(self.settings_slider(
                             0,
-                            self.config.max_threads,
-                            1_f64..=50_f64,
-                            "Max threads:",
+                            self.config.max_workers,
+                            1_f64..=10_f64,
+                            "Max Workers:",
                         ))
                         .push(self.settings_slider(
                             1,
-                            self.config.max_concurrent_files,
-                            1_f64..=self.config.max_threads as f64,
-                            "Max concurrent files:",
+                            self.config.concurrency_budget,
+                            1_f64..=100_f64,
+                            "Concurrency Budget:",
                         ))
                         .push(self.settings_slider(
                             2,
-                            self.config.max_threads_per_file,
-                            1_f64..=self.config.max_threads as f64,
-                            "Max threads per files:",
-                        ))
-                        .push(self.settings_slider(
-                            3,
-                            self.config.timeout as usize,
+                            self.config.timeout.as_millis() as usize,
                             100_f64..=60000_f64,
                             "Timeout:",
                         ))
                         .push(self.settings_slider(
-                            4,
-                            self.config.max_retries,
+                            3,
+                            self.config.max_retries as usize,
                             1_f64..=10_f64,
                             "Max retries:",
                         ))
                         .push(self.settings_slider(
-                            5,
-                            self.config.min_retry_delay as usize,
-                            100_f64..=self.config.max_retry_delay as f64,
+                            4,
+                            self.config.min_retry_delay.as_millis() as usize,
+                            100_f64..=self.config.max_retry_delay.as_millis() as f64,
                             "Min Retry delay:",
                         ))
                         .push(self.settings_slider(
-                            6,
-                            self.config.max_retry_delay as usize,
-                            self.config.min_retry_delay as f64..=60000_f64,
+                            5,
+                            self.config.max_retry_delay.as_millis() as usize,
+                            self.config.min_retry_delay.as_millis() as f64..=60000_f64,
                             "Max Retry delay:",
                         ))
                         .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
@@ -1217,8 +1142,8 @@ impl Application for App {
     }
 }
 
-// initializes the app from the config
 impl From<Config> for App {
+    /// initializes the app from the config
     fn from(config: Config) -> Self {
         // build the mega client
         let mega = mega_builder(&config).unwrap();
@@ -1607,11 +1532,12 @@ impl App {
             .into()
     }
 
-    fn start_runner(&self, workers: usize) -> WorkerState {
+    fn start_workers(&self, workers: usize) -> WorkerState {
         let cancel = CancellationToken::new();
         WorkerState {
             handles: spawn_workers(
                 self.mega.clone(),
+                Arc::new(self.config.clone()),
                 self.download_receiver.clone(),
                 self.download_sender.clone_async(),
                 self.runner_sender.clone(),
@@ -1622,15 +1548,25 @@ impl App {
         }
     }
 
-    // TODo don't just abandon the worker handles
-    fn stop_runner(&mut self) {
+    fn stop_workers(&mut self) {
         if let Some(state) = self.worker.take() {
             state.cancel.cancel();
+
+            // join workers in the background to log errors
+            tokio::spawn(async move {
+                for result in join_all(state.handles).await {
+                    match result {
+                        Err(error) => error!("worker panicked: {error:?}"),
+                        Ok(Err(error)) => error!("worker failed: {error:?}"),
+                        Ok(Ok(())) => (),
+                    }
+                }
+            });
         }
     }
 }
 
-// a wrapper around HashMap that uses an incrementing index as the key
+/// a wrapper around HashMap that uses an incrementing index as the key
 struct IndexMap<T> {
     data: HashMap<usize, T>,
     unused_indices: Vec<usize>,
@@ -1686,10 +1622,8 @@ struct WorkerState {
     cancel: CancellationToken,
 }
 
-// GUI settings
+/// returns the settings for Iced, with the config inside
 pub(crate) fn settings() -> Settings<Config> {
-    // TODO let icon = load_from_memory(ICON).unwrap();
-
     Settings {
         id: None,
         window: Window {
@@ -1702,7 +1636,7 @@ pub(crate) fn settings() -> Settings<Config> {
             decorations: true,
             transparent: false,
             always_on_top: false,
-            icon: None, // Some(from_rgba(icon.to_rgba8().into_raw(), 32, 32).unwrap()),
+            icon: None,
             #[cfg(target_os = "macos")]
             platform_specific: PlatformSpecific::default(),
             #[cfg(target_os = "windows")]
@@ -1710,7 +1644,7 @@ pub(crate) fn settings() -> Settings<Config> {
             #[cfg(target_os = "linux")]
             platform_specific: PlatformSpecific,
         },
-        flags: Config::load().expect("failed to load config"), // load config
+        flags: Config::load().expect("failed to load config"),
         default_font: Some(CABIN_REGULAR),
         default_text_size: 20.0,
         exit_on_close_request: true,
@@ -1744,17 +1678,12 @@ fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
                     ProxyMode::None => None::<Url>,
                 }
             }))
-            .timeout(Duration::from_millis(config.timeout))
+            .connect_timeout(config.timeout)
+            .read_timeout(config.timeout)
+            .tcp_keepalive(None)
             .build()?;
 
-        // build mega client
-        // .https(false)
-        //     .timeout(Duration::from_millis(config.timeout))
-        //     .max_retry_delay(Duration::from_millis(config.max_retry_delay))
-        //     .min_retry_delay(Duration::from_millis(config.min_retry_delay))
-        //     .max_retries(config.max_retries)
-
-        MegaClient::new(http_client, config.clone())
+        MegaClient::new(http_client)
     }
 }
 
