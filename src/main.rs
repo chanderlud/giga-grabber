@@ -1,10 +1,12 @@
 use crate::app::{App, settings};
+use crate::cli::run_cli;
 use crate::config::Config;
 use crate::mega_client::{MegaClient, Node, NodeKind};
 use iced::Application;
-use log::{error, LevelFilter};
+use log::{LevelFilter, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,6 +21,7 @@ use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
 mod app;
+mod cli;
 mod config;
 mod loading_wheel;
 mod mega_client;
@@ -139,8 +142,7 @@ impl Download {
         if self.node.size == 0 {
             return 0.0;
         }
-        (self.downloaded.load(Ordering::Relaxed) as f32 / self.node.size as f32)
-            .clamp(0.0, 1.0)
+        (self.downloaded.load(Ordering::Relaxed) as f32 / self.node.size as f32).clamp(0.0, 1.0)
     }
 
     fn speed(&self) -> f32 {
@@ -186,6 +188,8 @@ enum RunnerMessage {
     Inactive(String),
     /// notifies the UI when non-critical errors bubble up
     Error(String),
+    /// may be emitted during shutdown
+    Finished,
 }
 
 enum RetryDecision {
@@ -199,7 +203,24 @@ fn main() -> iced::Result {
     simple_logging::log_to_file("giga-grabber.log", LevelFilter::Warn).unwrap();
     log_panics::init();
 
-    App::run(settings())
+    let mut args = env::args();
+    let _exe = args.next(); // skip program name
+
+    if let Some(url) = args.next() {
+        // CLI mode: run downloads inside a Tokio runtime
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+
+        rt.block_on(async move {
+            if let Err(err) = run_cli(url).await {
+                error!("CLI error: {err:?}");
+            }
+        });
+
+        Ok(())
+    } else {
+        // No CLI args → launch GUI
+        App::run(settings())
+    }
 }
 
 /// load the nodes of a mega folder producing an array of MegaFile
@@ -332,9 +353,12 @@ async fn worker(
                             // proceed
                         }
                         RetryDecision::GiveUp => {
+                            // report the error to the UI
                             message_sender.send(RunnerMessage::Error(
                                 format!("Max retries reached for {}", download.node.name)
                             )).await?;
+                            // report as Inactive to help CLI track completion
+                            message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
                             continue;
                         }
                     }
@@ -351,6 +375,8 @@ async fn worker(
                 let full_path = file_path.join(&download.node.name);
                 // this download is already complete
                 if full_path.exists() {
+                    // report as Inactive to help CLI track completion
+                    message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
                     continue;
                 }
 
@@ -417,7 +443,7 @@ async fn worker(
                 }
 
                 // in every case, we want the UI to mark this download inactive
-                message_sender.send(RunnerMessage::Inactive(download.node.handle.clone())).await?
+                message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?
             }
             else => break,
         }
@@ -426,7 +452,11 @@ async fn worker(
     Ok(())
 }
 
-fn retry_decision(elapsed_since_last_retry: Duration, retries: u32, config: &Config) -> RetryDecision  {
+fn retry_decision(
+    elapsed_since_last_retry: Duration,
+    retries: u32,
+    config: &Config,
+) -> RetryDecision {
     if retries >= config.max_retries {
         return RetryDecision::GiveUp;
     }

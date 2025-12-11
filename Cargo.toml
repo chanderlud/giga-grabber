@@ -30,6 +30,7 @@ kanal = "0.1"
 log = "0.4"
 simple-logging = "2"
 log-panics = "2"
+indicatif = "0.18"
 
 [profile.release]
 opt-level = 3

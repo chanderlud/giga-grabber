@@ -33,7 +33,6 @@ use std::io::Read;
 use std::ops::RangeInclusive;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
@@ -199,7 +198,6 @@ pub(crate) struct App {
     all_paused: bool,
     bandwidth_counter: usize,
     rebuild_available: bool,
-    active_threads: Arc<AtomicUsize>,
 }
 
 impl Application for App {
@@ -217,10 +215,7 @@ impl Application for App {
 
         // runner is None when not in use
         if self.worker.is_some() {
-            title.push_str(&format!(
-                " - downloads active - {} threads active",
-                self.active_threads.load(Relaxed)
-            ));
+            title.push_str(" - downloads active");
         }
 
         if !self.active_downloads.is_empty() {
@@ -384,6 +379,7 @@ impl Application for App {
                     RunnerMessage::Error(error) => {
                         self.errors.push(error);
                     }
+                    RunnerMessage::Finished => (),
                 }
 
                 Command::none()
@@ -475,22 +471,19 @@ impl Application for App {
             }
             // loop that makes spinner spin
             Message::Tick(index) => {
-                match self.url_input.data.get_mut(&index).unwrap().status {
-                    // if input is still loading, update angle
-                    UrlStatus::Loading(ref mut angle) => {
-                        *angle += 0.2;
-                        // continue the loop
-                        Command::perform(
-                            async move {
-                                sleep(Duration::from_millis(10)).await;
-                                index
-                            },
-                            Message::Tick,
-                        )
-                    }
-                    // otherwise break the loop
-                    _ => Command::none(),
+                if let Some(input) = self.url_input.data.get_mut(&index)
+                    && let UrlStatus::Loading(ref mut angle) = input.status
+                {
+                    *angle = (*angle + 0.2) % (std::f32::consts::TAU);
+                    return Command::perform(
+                        async move {
+                            sleep(Duration::from_millis(10)).await;
+                            index
+                        },
+                        Message::Tick,
+                    );
                 }
+                Command::none()
             }
             // close error modal
             Message::CloseModal => {
@@ -623,6 +616,7 @@ impl Application for App {
             }
             Message::ResetConfig => {
                 self.config = Config::default();
+                self.rebuild_available = true;
                 Command::none()
             }
             Message::ThemeChanged(theme) => {
@@ -662,6 +656,7 @@ impl Application for App {
                             for proxy in contents.lines() {
                                 if self.proxy_regex.is_match(proxy) {
                                     self.config.proxies.push(proxy.to_string());
+                                    self.rebuild_available = true;
                                 }
                             }
                         }
@@ -683,8 +678,7 @@ impl Application for App {
                 self.file_filter.clear(); // clear file filter
 
                 // clear loaded URL inputs
-                self
-                    .url_input
+                self.url_input
                     .data
                     .retain(|_, input| input.status != UrlStatus::Loaded);
 
@@ -785,6 +779,7 @@ impl Application for App {
                 );
 
                 if !self.active_downloads.is_empty() {
+                    let bandwidth_gb = self.bandwidth_counter as f64 / 1024f64.powi(3);
                     download_group = download_group.push(
                         Row::new()
                             .spacing(10)
@@ -808,19 +803,13 @@ impl Application for App {
                             )
                             .push(
                                 container(
-                                    text(
-                                        format!(
-                                            " {:.2} GB used ",
-                                            self.bandwidth_counter as f32 / 1073741824_f32
-                                        )
-                                        .replace('0', "O"),
-                                    )
-                                    .font(Font::External {
-                                        name: "Inconsolata",
-                                        bytes: INCONSOLATA_MEDIUM,
-                                    })
-                                    .vertical_alignment(Vertical::Center)
-                                    .height(Length::Fill),
+                                    text(format!(" {bandwidth_gb:.2} GB used ").replace('0', "O"))
+                                        .font(Font::External {
+                                            name: "Inconsolata",
+                                            bytes: INCONSOLATA_MEDIUM,
+                                        })
+                                        .vertical_alignment(Vertical::Center)
+                                        .height(Length::Fill),
                                 )
                                 .style(theme::Container::Custom(Box::new(styles::container::Pill)))
                                 .height(Length::Fill),
@@ -908,6 +897,7 @@ impl Application for App {
                     .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
                     .map(|file| file.node.size)
                     .sum();
+                let size_gb = size as f64 / 1024f64.powi(3);
 
                 for file in &self.files {
                     column = column.push(self.recursive_files(file));
@@ -936,18 +926,15 @@ impl Application for App {
                                 )
                                 .push(
                                     container(
-                                        Text::new(
-                                            format!(" {:.2} GB ", size as f32 / 1073741824_f32)
-                                                .replace('0', "O"),
-                                        )
-                                        .font(Font::External {
-                                            name: "Inconsolata",
-                                            bytes: INCONSOLATA_MEDIUM,
-                                        })
-                                        .vertical_alignment(Vertical::Center)
-                                        .horizontal_alignment(Horizontal::Center)
-                                        .width(Length::Fill)
-                                        .height(Length::Fill),
+                                        Text::new(format!(" {:.2} GB ", size_gb).replace('0', "O"))
+                                            .font(Font::External {
+                                                name: "Inconsolata",
+                                                bytes: INCONSOLATA_MEDIUM,
+                                            })
+                                            .vertical_alignment(Vertical::Center)
+                                            .horizontal_alignment(Horizontal::Center)
+                                            .width(Length::Fill)
+                                            .height(Length::Fill),
                                     )
                                     .style(theme::Container::Custom(Box::new(
                                         styles::container::Pill,
@@ -1128,8 +1115,17 @@ impl Application for App {
             "runner messages",
             self.runner_receiver.take(),
             move |mut receiver| async move {
-                let message = receiver.as_mut().unwrap().recv().await.unwrap();
-                (Message::Runner(message), receiver)
+                let msg = if let Some(receiver) = receiver.as_mut() {
+                    if let Some(msg) = receiver.recv().await {
+                        msg
+                    } else {
+                        RunnerMessage::Finished
+                    }
+                } else {
+                    RunnerMessage::Finished
+                };
+
+                (Message::Runner(msg), receiver)
             },
         );
 
@@ -1171,7 +1167,6 @@ impl From<Config> for App {
             all_paused: false,
             bandwidth_counter: 0,
             rebuild_available: false,
-            active_threads: Default::default(),
         }
     }
 }
@@ -1573,10 +1568,7 @@ struct IndexMap<T> {
     next_index: usize,
 }
 
-impl<T> IndexMap<T>
-where
-    T: Default,
-{
+impl<T: Default> Default for IndexMap<T> {
     fn default() -> Self {
         Self {
             data: HashMap::from([(0, T::default())]),
@@ -1584,7 +1576,12 @@ where
             next_index: 1,
         }
     }
+}
 
+impl<T> IndexMap<T>
+where
+    T: Default,
+{
     fn insert(&mut self, value: T) -> usize {
         let index = if let Some(unused_index) = self.unused_indices.pop() {
             unused_index
@@ -1655,7 +1652,7 @@ pub(crate) fn settings() -> Settings<Config> {
 }
 
 // build a new mega client from config
-fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
+pub(crate) fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
     if config.proxy_mode != ProxyMode::None && config.proxies.is_empty() {
         Err(anyhow::Error::msg("no proxies"))
     } else {
