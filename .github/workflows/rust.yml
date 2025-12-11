@@ -9,10 +9,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Strip leading "v" from tag names for filenames, keep other refs as-is.
+  VERSION: ${{ startsWith(github.ref_name, 'v') && replace(github.ref_name, 'v', '') || github.ref_name }}
 
 jobs:
   build:
-
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -21,49 +22,91 @@ jobs:
         rust: [stable]
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Setup Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: ${{ matrix.rust }}
-        override: true
-        components: rustfmt, clippy
+      - uses: actions/checkout@v2
 
-    - name: Install Dependencies
-      if: matrix.os == 'ubuntu-latest'
-      run: sudo apt install libfontconfig1-dev
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: rustfmt, clippy
 
-    - name: Check formatting
-      run: cargo fmt -- --check
+      - name: Install Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
-    - name: Build
-      run: cargo build --verbose
+      - name: Check formatting
+        run: cargo fmt -- --check
 
-    - name: Create Release (Windows)
-      if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
-      run: |
-        echo ${{ matrix.os }}
-        cargo build --release
-        mv target/release/giga_grabber.exe target/release/giga_grabber_${{ matrix.os }}.exe
+      - name: Build (debug)
+        run: cargo build --verbose
 
-    - name: Create Release (Non-Windows)
-      if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'windows-latest'
-      run: |
-        echo ${{ matrix.os }}
-        cargo build --release
-        mv target/release/giga_grabber target/release/giga_grabber_${{ matrix.os }}
+      - name: Build (release for tagged builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cargo build --release
 
-    - name: Upload Release (Windows)
-      if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
-      uses: actions/upload-artifact@v4
-      with:
-        name: giga_grabber_${{ matrix.os }}
-        path: target/release/giga_grabber_${{ matrix.os }}.exe
+      # -------------------- Windows --------------------
+      - name: Package Windows binary
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $out = "giga-grabber-$env:VERSION-windows-standalone-x86_64.exe"
+          Write-Host "Output: $out"
+          Move-Item "target/release/giga_grabber.exe" "target/release/$out"
 
-    - name: Upload Release (Non-Windows)
-      if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'windows-latest'
-      uses: actions/upload-artifact@v4
-      with:
-        name: giga_grabber_${{ matrix.os }}
-        path: target/release/giga_grabber_${{ matrix.os }}
+      - name: Upload Windows artifact
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: giga-grabber-${{ env.VERSION }}-windows-standalone-x86_64
+          path: target/release/giga-grabber-${{ env.VERSION }}-windows-standalone-x86_64.exe
 
+      # -------------------- Linux --------------------
+      - name: Package Linux binary
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+        run: |
+          OUT="giga-grabber-${VERSION}-linux-standalone-x86_64"
+          echo "Output: ${OUT}"
+          mv target/release/giga_grabber "target/release/${OUT}"
+
+      - name: Upload Linux artifact
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: giga-grabber-${{ env.VERSION }}-linux-standalone-x86_64
+          path: target/release/giga-grabber-${{ env.VERSION }}-linux-standalone-x86_64
+
+      # -------------------- macOS (aarch64) --------------------
+      - name: Package macOS binary
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
+        run: |
+          OUT="giga-grabber-${VERSION}-macos-standalone-aarch64"
+          echo "Output: ${OUT}"
+          mv target/release/giga_grabber "target/release/${OUT}"
+
+      - name: Upload macOS artifact
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: giga-grabber-${{ env.VERSION }}-macos-standalone-aarch64
+          path: target/release/giga-grabber-${{ env.VERSION }}-macos-standalone-aarch64
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
