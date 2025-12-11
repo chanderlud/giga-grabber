@@ -9,8 +9,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Strip leading "v" from tag names for filenames, keep other refs as-is.
-  VERSION: ${{ startsWith(github.ref_name, 'v') && replace(github.ref_name, 'v', '') || github.ref_name }}
 
 jobs:
   build:
@@ -35,6 +33,19 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
+      - name: Compute VERSION (strip leading v)
+        id: vars
+        shell: bash
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" == v* ]]; then
+            ver="${ref#v}"
+          else
+            ver="$ref"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Using VERSION=$ver"
+
       - name: Check formatting
         run: cargo fmt -- --check
 
@@ -50,7 +61,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $out = "giga-grabber-$env:VERSION-windows-standalone-x86_64.exe"
+          $version = "${{ steps.vars.outputs.version }}"
+          $out = "giga-grabber-$version-windows-standalone-x86_64.exe"
           Write-Host "Output: $out"
           Move-Item "target/release/giga_grabber.exe" "target/release/$out"
 
@@ -58,14 +70,15 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: giga-grabber-${{ env.VERSION }}-windows-standalone-x86_64
-          path: target/release/giga-grabber-${{ env.VERSION }}-windows-standalone-x86_64.exe
+          name: giga-grabber-${{ steps.vars.outputs.version }}-windows-standalone-x86_64
+          path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-windows-standalone-x86_64.exe
 
       # -------------------- Linux --------------------
       - name: Package Linux binary
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
-          OUT="giga-grabber-${VERSION}-linux-standalone-x86_64"
+          OUT="giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64"
           echo "Output: ${OUT}"
           mv target/release/giga_grabber "target/release/${OUT}"
 
@@ -73,14 +86,15 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: giga-grabber-${{ env.VERSION }}-linux-standalone-x86_64
-          path: target/release/giga-grabber-${{ env.VERSION }}-linux-standalone-x86_64
+          name: giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64
+          path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64
 
       # -------------------- macOS (aarch64) --------------------
       - name: Package macOS binary
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
+        shell: bash
         run: |
-          OUT="giga-grabber-${VERSION}-macos-standalone-aarch64"
+          OUT="giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64"
           echo "Output: ${OUT}"
           mv target/release/giga_grabber "target/release/${OUT}"
 
@@ -88,8 +102,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: giga-grabber-${{ env.VERSION }}-macos-standalone-aarch64
-          path: target/release/giga-grabber-${{ env.VERSION }}-macos-standalone-aarch64
+          name: giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64
+          path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64
 
   release:
     name: Create GitHub Release
