@@ -9,10 +9,10 @@
 use iced::Color;
 use iced_native::renderer::BorderRadius;
 use iced_native::widget::slider::{HandleShape, StyleSheet};
-use iced_native::widget::{tree, Tree};
+use iced_native::widget::{Tree, tree};
 use iced_native::{
-    event, layout, mouse, renderer, touch, Clipboard, Element, Event, Layout, Length, Pixels,
-    Point, Rectangle, Shell, Size, Widget,
+    Clipboard, Element, Event, Layout, Length, Pixels, Point, Rectangle, Shell, Size, Widget,
+    event, layout, mouse, renderer, touch,
 };
 use std::ops::RangeInclusive;
 

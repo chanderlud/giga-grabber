@@ -1,8 +1,7 @@
+use crate::app::Message;
 use iced::widget::canvas::{Cursor, Geometry, Path, Program};
 use iced::widget::canvas::{Fill, Frame};
 use iced::{Color, Point, Rectangle, Theme, Vector};
-
-use crate::app::Message;
 
 struct Circle {
     radius: f32,

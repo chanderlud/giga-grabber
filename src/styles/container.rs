@@ -60,7 +60,7 @@ impl container::StyleSheet for Download {
     fn appearance(&self, _style: &Self::Style) -> Appearance {
         Appearance {
             text_color: Color::from_rgb8(255, 255, 255).into(),
-            background: if self.index % 2 != 0 {
+            background: if !self.index.is_multiple_of(2) {
                 Color::from_rgb8(50, 50, 66).into()
             } else {
                 Color::from_rgb8(3, 8, 28).into()

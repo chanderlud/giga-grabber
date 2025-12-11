@@ -1,3 +1,28 @@
+use crate::config::Config;
+use crate::loading_wheel::LoadingWheel;
+use crate::mega_client::{MegaClient, NodeKind};
+use crate::modal::Modal;
+use crate::slider::Slider;
+use crate::{
+    Download, MegaFile, ProxyMode, RunnerMessage, WorkerHandle, get_files, spawn_workers, styles,
+};
+use iced::alignment::{Horizontal, Vertical};
+use iced::time::every;
+use iced::widget::{Column, Row, Space, Text, canvas, svg};
+use iced::window::{PlatformSpecific, Settings as Window};
+use iced::{
+    Alignment, Application, Color, Command, Element, Font, Length, Renderer, Settings,
+    Subscription, clipboard, executor, theme,
+};
+use iced_native::widget::scrollable::Properties;
+use iced_native::widget::{
+    button, checkbox, container, pick_list, progress_bar, scrollable, text, text_input,
+};
+use native_dialog::FileDialog;
+use num_traits::cast::ToPrimitive;
+use regex::Regex;
+use reqwest::{Client, Proxy, Url};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -5,40 +30,13 @@ use std::fmt::{Display, Formatter};
 use std::io::Read;
 use std::ops::RangeInclusive;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 use std::time::Duration;
-
-use iced::alignment::{Horizontal, Vertical};
-use iced::time::every;
-use iced::widget::{canvas, svg, Column, Row, Space, Text};
-use iced::window::{PlatformSpecific, Settings as Window};
-use iced::{
-    clipboard, executor, theme, Alignment, Application, Color, Command, Element, Font, Length,
-    Renderer, Settings, Subscription,
-};
-use iced_native::widget::scrollable::Properties;
-use iced_native::widget::{
-    button, checkbox, container, pick_list, progress_bar, scrollable, text, text_input,
-};
-use mega::Client;
-use native_dialog::FileDialog;
-use num_traits::cast::ToPrimitive;
-use regex::Regex;
-use reqwest::{Client as HttpClient, Proxy, Url};
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time::sleep;
-
-use crate::config::Config;
-use crate::loading_wheel::LoadingWheel;
-use crate::modal::Modal;
-use crate::slider::Slider;
-use crate::{
-    get_files, runner, styles, Download, DownloadQueue, MegaFile, ProxyMode, RunnerMessage,
-};
+use tokio_util::sync::CancellationToken;
 
 const CHECK_ICON: &[u8] = include_bytes!("../assets/check.svg");
 const COLLAPSE_ICON: &[u8] = include_bytes!("../assets/collapse.svg");
@@ -87,31 +85,6 @@ impl Display for Theme {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum MegaError {
-    OutOfBandwidth,
-    // arc is needed to clone mega::Error
-    Other(Arc<mega::Error>),
-}
-
-impl From<mega::Error> for MegaError {
-    fn from(e: mega::Error) -> Self {
-        match e {
-            mega::Error::OutOfBandwidth => Self::OutOfBandwidth,
-            _ => Self::Other(Arc::new(e)),
-        }
-    }
-}
-
-impl Display for MegaError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::OutOfBandwidth => write!(f, "Out of bandwidth"),
-            Self::Other(e) => write!(f, "{}", e),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub(crate) enum Message {
     // force the GUI to update
     Refresh,
@@ -129,8 +102,6 @@ pub(crate) enum Message {
     AddFiles,
     // received message from runner
     Runner(RunnerMessage),
-    // received message from mega client
-    Mega(MegaError),
     // navigate to a different route
     Navigate(Route),
     // toggle file & children for download
@@ -189,22 +160,15 @@ pub(crate) enum Route {
     Settings,
 }
 
+#[derive(Default)]
 struct UrlInput {
     value: String,
     status: UrlStatus,
 }
 
-impl Default for UrlInput {
-    fn default() -> Self {
-        Self {
-            value: String::new(),
-            status: UrlStatus::None,
-        }
-    }
-}
-
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Default)]
 pub(crate) enum UrlStatus {
+    #[default]
     None,
     Invalid,
     // f32 is the angle of the loading spinner
@@ -214,15 +178,13 @@ pub(crate) enum UrlStatus {
 
 pub(crate) struct App {
     config: Config,
-    mega: Client,
-    runner: Option<Vec<JoinHandle<()>>>,
-    download_queue: DownloadQueue,
-    queued: Arc<AtomicUsize>,
+    mega: MegaClient,
+    worker: Option<WorkerState>,
     active_downloads: HashMap<String, Download>,
-    runner_sender: Arc<UnboundedSender<RunnerMessage>>,
-    runner_receiver: RefCell<Option<UnboundedReceiver<RunnerMessage>>>,
-    mega_sender: Arc<UnboundedSender<mega::Error>>,
-    mega_receiver: RefCell<Option<UnboundedReceiver<mega::Error>>>,
+    runner_sender: Sender<RunnerMessage>,
+    runner_receiver: RefCell<Option<Receiver<RunnerMessage>>>,
+    download_sender: kanal::Sender<Download>,
+    download_receiver: kanal::AsyncReceiver<Download>,
     files: Vec<MegaFile>,
     file_filter: HashMap<String, bool>,
     url_input: IndexMap<UrlInput>,
@@ -252,7 +214,7 @@ impl Application for App {
         let mut title = String::from("Giga Grabber");
 
         // runner is None when not in use
-        if self.runner.is_some() {
+        if self.worker.is_some() {
             title.push_str(&format!(
                 " - downloads active - {} threads active",
                 self.active_threads.load(Relaxed)
@@ -263,7 +225,7 @@ impl Application for App {
             title.push_str(&format!(" - {} running", self.active_downloads.len()));
         }
 
-        let queued = self.queued.load(Relaxed);
+        let queued = self.download_receiver.len();
         if queued > 0 {
             title.push_str(&format!(" - {} queued", queued));
         }
@@ -380,45 +342,22 @@ impl Application for App {
                     .iter()
                     .flat_map(|file| file.iter())
                     .filter(|file| {
-                        if let Some(download) = self.file_filter.get(file.node.hash()) {
-                            *download && file.node.kind().is_file()
+                        if let Some(download) = self.file_filter.get(&file.node.handle) {
+                            *download && file.node.kind == NodeKind::File
                         } else {
-                            file.node.kind().is_file()
+                            file.node.kind == NodeKind::File
                         }
                     }) // only download files that are marked for download
                     .map(|file| file.clone().into()) // convert MegaFile into Download
                     .collect::<Vec<Download>>();
 
-                // update queued count
-                self.queued.fetch_add(downloads.len(), Relaxed);
                 // add downloads to queue
                 for download in downloads {
-                    self.download_queue.push(download);
+                    self.download_sender.send(download).unwrap();
                 }
 
-                if let Some(runner_threads) = self.runner.as_ref() {
-                    if runner_threads.iter().all(|thread| thread.is_finished()) {
-                        // all threads are finished, create new runner
-                        self.runner = Some(self.start_runner(self.config.max_concurrent_files));
-                    } else {
-                        // the number of finished threads
-                        let finished = runner_threads
-                            .iter()
-                            .filter(|thread| thread.is_finished())
-                            .count();
-
-                        if finished > 0 {
-                            // there are finished threads, create replacements
-                            let new_threads = self.start_runner(finished);
-
-                            if let Some(mut_threads) = self.runner.as_mut() {
-                                mut_threads.extend(new_threads);
-                            }
-                        }
-                    }
-                } else {
-                    // runner doesn't exist, create it
-                    self.runner = Some(self.start_runner(self.config.max_concurrent_files));
+                if self.worker.is_none() {
+                    self.worker = Some(self.start_runner(self.config.max_concurrent_files));
                 }
 
                 self.route = Route::Home; // navigate to home
@@ -427,12 +366,12 @@ impl Application for App {
             // a download has either been started or stopped
             Message::Runner(message) => {
                 match message {
-                    RunnerMessage::Start(download) => {
+                    RunnerMessage::Active(download) => {
                         // add download to active downloads
                         self.active_downloads
-                            .insert(download.node.hash().to_string(), download);
+                            .insert(download.node.handle.clone(), download);
                     }
-                    RunnerMessage::Stop(id) => {
+                    RunnerMessage::Finished(id) => {
                         // add downloaded bytes to bandwidth counter
                         if let Some(download) = self.active_downloads.get(&id) {
                             self.bandwidth_counter += download.downloaded.load(Relaxed);
@@ -441,32 +380,31 @@ impl Application for App {
                         self.active_downloads.remove(&id); // remove download from active downloads
 
                         // if there are no active downloads, abort runner
-                        if self.active_downloads.is_empty() {
+                        if self.active_downloads.is_empty() && self.download_receiver.is_empty() {
                             self.stop_runner();
                         }
+                    }
+                    RunnerMessage::Error(error) => {
+
                     }
                 }
 
                 Command::none()
             }
             // a message (error) from the mega backend
-            Message::Mega(error) => {
-                match error {
-                    MegaError::OutOfBandwidth => {
-                        if !self.all_paused {
-                            self.error_modal = Some("Out of bandwidth".to_string());
-                            Command::perform(async {}, |_| Message::PauseDownloads)
-                            // pause downloads
-                        } else {
-                            Command::none()
-                        }
-                    }
-                    _ => {
-                        self.errors.push(format!("{}", error)); // add error to error list
-                        Command::none()
-                    }
-                }
-            }
+            // Message::Mega(error) => {
+            //     match error {
+            //         MegaError::OutOfBandwidth => {
+            //             if !self.all_paused {
+            //                 self.error_modal = Some("Out of bandwidth".to_string());
+            //                 Command::perform(async {}, |_| Message::PauseDownloads)
+            //                 // pause downloads
+            //             } else {
+            //                 Command::none()
+            //             }
+            //         }
+            //     }
+            // }
             // navigate to a route
             Message::Navigate(route) => {
                 match route {
@@ -486,13 +424,11 @@ impl Application for App {
             // toggle whether a file should be downloaded
             Message::ToggleFile(item) => {
                 // insert an entry for the file in the filter
-                self.file_filter
-                    .insert(item.1.node.hash().to_string(), item.0);
+                self.file_filter.insert(item.1.node.handle.clone(), item.0);
 
                 // all children of the file should have the same entry in the filter
                 item.1.iter().for_each(|file| {
-                    self.file_filter
-                        .insert(file.node.hash().to_string(), item.0);
+                    self.file_filter.insert(file.node.handle.clone(), item.0);
                 });
 
                 Command::none()
@@ -567,16 +503,16 @@ impl Application for App {
             // cancels all downloads
             Message::CancelDownloads => {
                 // clear the queue
-                while self.download_queue.try_pop().is_some() {}
+                while let Ok(Some(download)) = self.download_receiver.try_recv() {
+                    download.cancel();
+                }
 
                 // cancel all active downloads
-                for download in self.active_downloads.values() {
+                for (_, download) in self.active_downloads.drain() {
                     download.cancel();
                 }
 
                 self.stop_runner(); // stop the runner
-                self.active_downloads.clear(); // clear active downloads
-                self.queued.store(0, Relaxed); // reset queued counter
 
                 Command::none()
             }
@@ -630,9 +566,9 @@ impl Application for App {
             }
             // rebuilds the mega client
             Message::RebuildMega => {
-                if let Some(runner_threads) = &self.runner {
+                if let Some(workers) = self.worker.as_ref().map(|w| &w.handles) {
                     // if any threads are active, we can't rebuild
-                    if runner_threads.iter().any(|thread| !thread.is_finished()) {
+                    if workers.iter().any(|w| !w.is_finished()) {
                         self.error_modal = Some(
                             "Cannot apply these configuration changes while downloads are active"
                                 .to_string(),
@@ -645,7 +581,7 @@ impl Application for App {
                 }
 
                 // build a new mega client
-                match mega_builder(&self.config, Arc::clone(&self.mega_sender)) {
+                match mega_builder(&self.config) {
                     Ok(mega) => {
                         self.mega = mega; // set the new mega client
                         self.rebuild_available = false; // rebuild is no longer available
@@ -851,7 +787,7 @@ impl Application for App {
                                 .align_items(Alignment::Center)
                                 .push(Space::new(Length::Fixed(7_f32), Length::Shrink))
                                 .push(
-                                    text(download.node.name())
+                                    text(&download.node.name)
                                         .width(Length::Fill)
                                         .height(Length::Fill)
                                         .vertical_alignment(Vertical::Center),
@@ -1031,13 +967,13 @@ impl Application for App {
                     .iter()
                     .flat_map(|file| file.iter())
                     .filter(|file| {
-                        if let Some(download) = self.file_filter.get(file.node.hash()) {
-                            *download && file.node.kind().is_file()
+                        if let Some(download) = self.file_filter.get(&file.node.handle) {
+                            *download && file.node.kind == NodeKind::File
                         } else {
-                            file.node.kind().is_file()
+                            file.node.kind == NodeKind::File
                         }
                     }) // only count files that are marked for download
-                    .map(|file| file.node.size()) // get the size of every file
+                    .map(|file| file.node.size) // get the size of every file
                     .sum(); // sum the sizes
 
                 for file in &self.files {
@@ -1272,50 +1208,32 @@ impl Application for App {
             },
         );
 
-        // reads mega messages from channel and sends them to the UI
-        let mega_subscription = iced::subscription::unfold(
-            "mega messages",
-            self.mega_receiver.take(),
-            move |mut receiver| async move {
-                let message = receiver.as_mut().unwrap().recv().await.unwrap();
-                (Message::Mega(message.into()), receiver)
-            },
-        );
-
         // forces the UI to refresh every second
-        // this is needed because changes to the active downloads dont trigger a refresh
+        // this is needed because changes to the active downloads don't trigger a refresh
         let refresh = every(Duration::from_secs(1)).map(|_| Message::Refresh);
 
         // run all subscriptions in parallel
-        Subscription::batch(vec![runner_subscription, mega_subscription, refresh])
+        Subscription::batch(vec![runner_subscription, refresh])
     }
 }
 
 // initializes the app from the config
 impl From<Config> for App {
     fn from(config: Config) -> Self {
-        // create a channel for the mega client to send messages to the UI
-        let (tx, mega_receiver) = unbounded_channel();
-        let mega_sender = Arc::new(tx);
-
         // build the mega client
-        let mega = mega_builder(&config, Arc::clone(&mega_sender)).unwrap();
-
-        // create a channel for the runner to send messages to the UI
-        let (tx, runner_receiver) = unbounded_channel();
-        let runner_sender = Arc::new(tx);
+        let mega = mega_builder(&config).unwrap();
+        let (runner_sender, runner_receiver) = channel(64);
+        let (download_sender, download_receiver) = kanal::unbounded();
 
         Self {
             config,
             mega,
-            runner: None,
-            download_queue: DownloadQueue::default(),
-            queued: Arc::new(Default::default()),
+            worker: None,
             active_downloads: HashMap::new(),
             runner_sender,
             runner_receiver: RefCell::new(Some(runner_receiver)),
-            mega_sender,
-            mega_receiver: RefCell::new(Some(mega_receiver)),
+            download_sender,
+            download_receiver: download_receiver.to_async(),
             files: Vec::new(),
             file_filter: HashMap::new(),
             url_input: IndexMap::default(),
@@ -1339,14 +1257,14 @@ impl App {
             Row::new()
                 .spacing(5)
                 .push(
-                    text(file.node.name())
+                    text(&file.node.name)
                         .width(Length::Fill)
                         .vertical_alignment(Vertical::Center),
                 )
                 .push(
                     checkbox(
                         "",
-                        *self.file_filter.get(file.node.hash()).unwrap_or(&true),
+                        *self.file_filter.get(&file.node.handle).unwrap_or(&true),
                         |value| Message::ToggleFile(Box::new((value, file.clone()))),
                     )
                     .style(theme::Checkbox::Custom(Box::new(
@@ -1355,7 +1273,7 @@ impl App {
                 )
                 .into()
         } else {
-            let expanded = *self.expanded_files.get(file.node.hash()).unwrap_or(&false);
+            let expanded = *self.expanded_files.get(&file.node.handle).unwrap_or(&false);
 
             let mut column = Column::new().spacing(5).push(
                 Row::new()
@@ -1371,18 +1289,18 @@ impl App {
                             .width(Length::Fixed(16_f32)),
                         )
                         .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
-                        .on_press(Message::ToggleExpanded(file.node.hash().to_string()))
+                        .on_press(Message::ToggleExpanded(file.node.handle.clone()))
                         .padding(3),
                     )
                     .push(
-                        text(file.node.name())
+                        text(&file.node.name)
                             .width(Length::Fill)
                             .vertical_alignment(Vertical::Center),
                     )
                     .push(
                         checkbox(
                             "",
-                            *self.file_filter.get(file.node.hash()).unwrap_or(&true),
+                            *self.file_filter.get(&file.node.handle).unwrap_or(&true),
                             |value| Message::ToggleFile(Box::new((value, file.clone()))),
                         )
                         .style(theme::Checkbox::Custom(Box::new(
@@ -1465,7 +1383,7 @@ impl App {
         button.into()
     }
 
-    fn error_log(&self) -> Element<Message> {
+    fn error_log(&self) -> Element<'_, Message> {
         let mut column = Column::new().spacing(2).width(Length::Fill);
 
         for error in &self.errors {
@@ -1476,7 +1394,7 @@ impl App {
         column.into()
     }
 
-    fn url_inputs(&self) -> Element<Message> {
+    fn url_inputs(&self) -> Element<'_, Message> {
         let mut inputs = Column::new().spacing(5);
 
         for (index, input) in self.url_input.data.iter() {
@@ -1604,7 +1522,7 @@ impl App {
             .into()
     }
 
-    fn proxy_selector(&self) -> Element<Message> {
+    fn proxy_selector(&self) -> Element<'_, Message> {
         let mut column = Column::new();
 
         if self.config.proxy_mode == ProxyMode::Random {
@@ -1689,23 +1607,25 @@ impl App {
             .into()
     }
 
-    fn start_runner(&self, workers: usize) -> Vec<JoinHandle<()>> {
-        runner(
-            self.config.clone(),
-            &self.mega,
-            &self.download_queue,
-            &self.runner_sender,
-            &self.queued,
-            &self.active_threads,
-            workers,
-        )
+    fn start_runner(&self, workers: usize) -> WorkerState {
+        let cancel = CancellationToken::new();
+        WorkerState {
+            handles: spawn_workers(
+                self.mega.clone(),
+                self.download_receiver.clone(),
+                self.download_sender.clone_async(),
+                self.runner_sender.clone(),
+                cancel.clone(),
+                workers,
+            ),
+            cancel,
+        }
     }
 
+    // TODo don't just abandon the worker handles
     fn stop_runner(&mut self) {
-        if let Some(runner_threads) = self.runner.take() {
-            for thread in runner_threads {
-                thread.abort();
-            }
+        if let Some(state) = self.worker.take() {
+            state.cancel.cancel();
         }
     }
 }
@@ -1761,6 +1681,11 @@ where
     }
 }
 
+struct WorkerState {
+    handles: Vec<WorkerHandle>,
+    cancel: CancellationToken,
+}
+
 // GUI settings
 pub(crate) fn settings() -> Settings<Config> {
     // TODO let icon = load_from_memory(ICON).unwrap();
@@ -1796,15 +1721,12 @@ pub(crate) fn settings() -> Settings<Config> {
 }
 
 // build a new mega client from config
-fn mega_builder(
-    config: &Config,
-    sender: Arc<UnboundedSender<mega::Error>>,
-) -> mega::Result<Client> {
+fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
     if config.proxy_mode != ProxyMode::None && config.proxies.is_empty() {
-        Err(mega::Error::NoProxies)
+        Err(anyhow::Error::msg("no proxies"))
     } else {
         // build http client
-        let http_client = HttpClient::builder()
+        let http_client = Client::builder()
             .proxy(Proxy::custom({
                 let proxies = config.proxies.clone();
                 let proxy_mode = config.proxy_mode;
@@ -1823,18 +1745,16 @@ fn mega_builder(
                 }
             }))
             .timeout(Duration::from_millis(config.timeout))
-            .build()
-            .unwrap();
+            .build()?;
 
         // build mega client
-        Client::builder()
-            .https(false)
-            .timeout(Duration::from_millis(config.timeout))
-            .max_retry_delay(Duration::from_millis(config.max_retry_delay))
-            .min_retry_delay(Duration::from_millis(config.min_retry_delay))
-            .max_retries(config.max_retries)
-            .sender(sender)
-            .build(http_client)
+        // .https(false)
+        //     .timeout(Duration::from_millis(config.timeout))
+        //     .max_retry_delay(Duration::from_millis(config.max_retry_delay))
+        //     .min_retry_delay(Duration::from_millis(config.min_retry_delay))
+        //     .max_retries(config.max_retries)
+
+        MegaClient::new(http_client, config.clone())
     }
 }
 

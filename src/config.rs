@@ -1,12 +1,10 @@
+use crate::ProxyMode;
+use crate::app::Theme;
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::fs::File;
 use std::io;
 use std::path::Path;
-
-use serde::{Deserialize, Serialize};
-
-use crate::app::Theme;
-use crate::ProxyMode;
 
 type Result<T> = std::result::Result<T, Error>;
 

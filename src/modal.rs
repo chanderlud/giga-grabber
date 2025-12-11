@@ -1,7 +1,7 @@
 use iced::alignment::Alignment;
 use iced::mouse;
 use iced::{Color, Element, Event, Length, Point, Rectangle, Size};
-use iced_native::{event, layout, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced_native::{Clipboard, Layout, Shell, Widget, event, layout, overlay, renderer, widget};
 
 // based on the modal example from the iced repository
 
@@ -235,14 +235,12 @@ where
     ) -> event::Status {
         let content_bounds = layout.children().next().unwrap().bounds();
 
-        if let Some(message) = self.on_blur.as_ref() {
-            if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = &event {
-                if !content_bounds.contains(cursor_position) {
+        if let Some(message) = self.on_blur.as_ref()
+            && let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = &event
+                && !content_bounds.contains(cursor_position) {
                     shell.publish(message.clone());
                     return event::Status::Captured;
                 }
-            }
-        }
 
         self.content.as_widget_mut().on_event(
             self.tree,
