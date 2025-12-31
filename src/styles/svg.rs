@@ -1,5 +1,4 @@
-use iced::widget::svg;
-use iced::widget::svg::Appearance;
+use iced::widget::svg::{Status, Style};
 use iced::{Color, Theme};
 
 #[derive(Clone)]
@@ -11,12 +10,8 @@ impl SvgIcon {
     pub(crate) fn new(color: Option<Color>) -> Self {
         Self { color }
     }
-}
 
-impl svg::StyleSheet for SvgIcon {
-    type Style = Theme;
-
-    fn appearance(&self, _style: &Self::Style) -> Appearance {
-        Appearance { color: self.color }
+    pub fn style(&self, _theme: &Theme, _status: Status) -> Style {
+        Style { color: self.color }
     }
 }

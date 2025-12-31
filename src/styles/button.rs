@@ -1,136 +1,78 @@
-use iced::widget::button;
-use iced::widget::button::Appearance;
-use iced::{Color, Theme};
+use iced::widget::button::{Status, Style};
+use iced::{Border, Color, Theme, border};
 
 pub(crate) struct Nav {
     pub(crate) active: bool,
 }
 
-impl button::StyleSheet for Nav {
-    type Style = Theme;
+impl Nav {
+    pub fn style(&self, theme: &Theme, status: Status) -> Style {
+        let palette = theme.extended_palette();
 
-    fn active(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: if self.active {
-                Color::from_rgb8(70, 70, 86).into()
-            } else {
-                Color::TRANSPARENT.into()
+        match status {
+            Status::Active => Style {
+                background: Some(if self.active {
+                    palette.background.weak.color.into()
+                } else {
+                    Color::TRANSPARENT.into()
+                }),
+                border: Border {
+                    radius: border::radius(6.0),
+                    width: 0.0,
+                    color: Default::default(),
+                },
+                text_color: palette.background.base.text,
+                ..Default::default()
             },
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255, 255),
-        }
-    }
-
-    fn hovered(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: if self.active {
-                Color::from_rgb8(70, 70, 86).into()
-            } else {
-                Color::from_rgb8(40, 40, 56).into()
+            Status::Hovered | Status::Pressed => Style {
+                background: Some(if self.active {
+                    palette.background.weak.color.into()
+                } else {
+                    palette.background.base.color.into()
+                }),
+                border: Border {
+                    radius: border::radius(6.0),
+                    width: 0.0,
+                    color: Default::default(),
+                },
+                text_color: palette.background.base.text,
+                ..Default::default()
             },
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255, 255),
-        }
-    }
-
-    fn disabled(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: Color::TRANSPARENT.into(),
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(180, 180, 180),
-        }
-    }
-}
-
-pub(crate) struct Button;
-
-impl button::StyleSheet for Button {
-    type Style = Theme;
-
-    fn active(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: Color::from_rgb8(255, 48, 78).into(),
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255, 255),
-        }
-    }
-
-    fn hovered(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: Color::from_rgb8(255, 68, 98).into(),
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(255, 255, 255),
-        }
-    }
-}
-
-pub(crate) struct WarningButton;
-
-impl button::StyleSheet for WarningButton {
-    type Style = Theme;
-
-    fn active(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: Color::from_rgb8(255, 191, 83).into(),
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(3, 8, 28),
-        }
-    }
-
-    fn hovered(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: Color::from_rgb8(255, 201, 103).into(),
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Color::from_rgb8(3, 8, 28),
+            Status::Disabled => Style {
+                background: Some(Color::TRANSPARENT.into()),
+                border: Border {
+                    radius: border::radius(6.0),
+                    width: 0.0,
+                    color: Default::default(),
+                },
+                text_color: palette.background.weak.text,
+                ..Default::default()
+            },
         }
     }
 }
 
 pub(crate) struct IconButton;
 
-impl button::StyleSheet for IconButton {
-    type Style = Theme;
-
-    fn active(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: None,
-            border_radius: 0.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Default::default(),
-        }
-    }
-
-    fn hovered(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            shadow_offset: Default::default(),
-            background: Color::from_rgb8(32, 32, 32).into(),
-            border_radius: 4.0,
-            border_width: 0.0,
-            border_color: Default::default(),
-            text_color: Default::default(),
+impl IconButton {
+    pub fn style(&self, theme: &Theme, status: Status) -> Style {
+        let palette = theme.extended_palette();
+        match status {
+            Status::Active => Style {
+                ..Default::default()
+            },
+            Status::Hovered | Status::Pressed => Style {
+                background: Some(palette.background.strong.color.into()),
+                border: Border {
+                    radius: border::radius(4.0),
+                    width: 0.0,
+                    color: Default::default(),
+                },
+                ..Default::default()
+            },
+            Status::Disabled => Style {
+                ..Default::default()
+            },
         }
     }
 }

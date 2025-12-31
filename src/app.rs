@@ -1,42 +1,34 @@
+use crate::circular::Circular;
 use crate::config::Config;
-use crate::loading_wheel::LoadingWheel;
 use crate::mega_client::{MegaClient, NodeKind};
-use crate::modal::Modal;
-use crate::slider::Slider;
 use crate::{
     Download, MegaFile, ProxyMode, RunnerMessage, WorkerHandle, get_files, spawn_workers, styles,
 };
 use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
+use iced::futures::Stream;
+use iced::futures::sink::SinkExt;
 use iced::time::every;
-use iced::widget::{Column, Row, Space, Text, canvas, svg};
-use iced::window::{PlatformSpecific, Settings as Window};
-use iced::{
-    Alignment, Application, Color, Command, Element, Font, Length, Renderer, Settings,
-    Subscription, clipboard, executor, theme,
+use iced::widget::{Column, Row, slider, space, svg};
+use iced::widget::{
+    button, center, checkbox, container, mouse_area, opaque, pick_list, progress_bar, scrollable,
+    stack, text, text_input,
 };
-use iced_native::widget::scrollable::Properties;
-use iced_native::widget::{
-    button, checkbox, container, pick_list, progress_bar, scrollable, text, text_input,
-};
+use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme, clipboard};
+use iced::{stream};
 use log::error;
 use native_dialog::FileDialog;
 use num_traits::cast::ToPrimitive;
 use regex::Regex;
 use reqwest::{Client, Proxy, Url};
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
 use std::io::Read;
 use std::ops::RangeInclusive;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio::time::sleep;
+use tokio::sync::mpsc::{Sender as TokioSender, channel as tokio_channel};
 use tokio_util::sync::CancellationToken;
 
 const CHECK_ICON: &[u8] = include_bytes!("../assets/check.svg");
@@ -56,35 +48,6 @@ const INCONSOLATA_MEDIUM: &[u8] =
     include_bytes!("../assets/Inconsolata/static/Inconsolata-Medium.ttf");
 const CABIN_REGULAR: &[u8] = include_bytes!("../assets/Cabin/static/Cabin-Regular.ttf");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub(crate) enum Theme {
-    // use system theme
-    System,
-    // force dark theme
-    Dark,
-    // fore light theme
-    Light,
-}
-
-impl Theme {
-    pub const ALL: [Self; 3] = [Self::System, Self::Dark, Self::Light];
-}
-
-// implement display for theme dropdown
-impl Display for Theme {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::System => "System Default",
-                Self::Dark => "Dark",
-                Self::Light => "Light",
-            }
-        )
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     // force the GUI to update
@@ -103,6 +66,8 @@ pub(crate) enum Message {
     AddFiles,
     // received message from runner
     Runner(RunnerMessage),
+    // runner subscription is ready, provides sender for workers
+    RunnerReady(TokioSender<RunnerMessage>),
     // navigate to a different route
     Navigate(Route),
     // toggle file & children for download
@@ -115,8 +80,6 @@ pub(crate) enum Message {
     AddInput,
     // remove a url input
     RemoveInput(usize),
-    // tick for loading spinner
-    Tick(usize),
     // close the error modal
     CloseModal,
     // cancel all downloads
@@ -140,7 +103,7 @@ pub(crate) enum Message {
     // reset config to default
     ResetConfig,
     // theme changed
-    ThemeChanged(Theme),
+    ThemeChanged(iced::Theme),
     // proxy mode changed
     ProxyModeChanged(ProxyMode),
     // proxy url changed, single proxy mode
@@ -172,8 +135,7 @@ pub(crate) enum UrlStatus {
     #[default]
     None,
     Invalid,
-    // f32 is the angle of the loading spinner
-    Loading(f32),
+    Loading,
     Loaded,
 }
 
@@ -182,8 +144,7 @@ pub(crate) struct App {
     mega: MegaClient,
     worker: Option<WorkerState>,
     active_downloads: HashMap<String, Download>,
-    runner_sender: Sender<RunnerMessage>,
-    runner_receiver: RefCell<Option<Receiver<RunnerMessage>>>,
+    runner_sender: Option<TokioSender<RunnerMessage>>,
     download_sender: kanal::Sender<Download>,
     download_receiver: kanal::AsyncReceiver<Download>,
     files: Vec<MegaFile>,
@@ -200,17 +161,13 @@ pub(crate) struct App {
     rebuild_available: bool,
 }
 
-impl Application for App {
-    type Executor = executor::Default;
-    type Message = Message;
-    type Theme = theme::Theme;
-    type Flags = Config;
-
-    fn new(flags: Self::Flags) -> (Self, Command<Self::Message>) {
-        (flags.into(), Command::none())
+impl App {
+    pub fn new() -> (Self, Task<Message>) {
+        let config = Config::load().expect("failed to load config");
+        (config.into(), Task::none())
     }
 
-    fn title(&self) -> String {
+    pub fn title(&self) -> String {
         let mut title = String::from("Giga Grabber");
 
         // runner is None when not in use
@@ -230,84 +187,67 @@ impl Application for App {
         title
     }
 
-    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+    pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            // force the GUI to update
-            Message::Refresh => Command::none(),
-            // add url from clipboard, emit GotClipboard w/ contents
-            Message::AddUrlClipboard => clipboard::read(Message::GotClipboard),
-            // got clipboard contents
+            Message::Refresh => Task::none(),
+            Message::AddUrlClipboard => clipboard::read().map(Message::GotClipboard),
             Message::GotClipboard(contents) => {
-                if let Some(url) = contents {
-                    if self.url_regex.is_match(&url) {
+                if let Some(input) = contents {
+                    let stripped = input.trim();
+                    if self.url_regex.is_match(stripped) {
                         // create new url input with url as value
                         let index = self.url_input.insert(UrlInput {
-                            value: url.clone(),
+                            value: stripped.to_string(),
                             status: UrlStatus::None,
                         });
 
                         // load the url
-                        Command::perform(async move { index }, Message::AddUrl)
+                        Task::perform(async move { index }, Message::AddUrl)
                     } else {
                         self.error_modal = Some("Invalid url".to_string());
-                        Command::none()
+                        Task::none()
                     }
                 } else {
                     self.error_modal = Some("Clipboard is empty".to_string());
-                    Command::none()
+                    Task::none()
                 }
             }
-            // load files from url
             Message::AddUrl(index) => {
                 // get input from index
                 if let Some(input) = self.url_input.get_mut(index) {
                     // check if url is valid
                     if !self.url_regex.is_match(&input.value) {
                         input.status = UrlStatus::Invalid;
-                        Command::none()
+                        Task::none()
                     } else {
                         match input.status {
-                            UrlStatus::Loading(_) | UrlStatus::Loaded => Command::none(), // dont do anything if url is already loading or loaded
+                            UrlStatus::Loading | UrlStatus::Loaded => Task::none(), // dont do anything if url is already loading or loaded
                             _ => {
-                                input.status = UrlStatus::Loading(0_f32); // set status to loading
+                                input.status = UrlStatus::Loading; // set status to loading
 
-                                Command::batch(vec![
-                                    // get files from url asynchronously
-                                    Command::perform(
-                                        get_files(self.mega.clone(), input.value.clone(), index),
-                                        Message::GotFiles,
-                                    ),
-                                    // begin the loading spinner animation
-                                    Command::perform(
-                                        async move {
-                                            // wait 10ms before ticking
-                                            sleep(Duration::from_millis(10)).await;
-                                            index
-                                        },
-                                        Message::Tick,
-                                    ),
-                                ])
+                                Task::perform(
+                                    get_files(self.mega.clone(), input.value.clone(), index),
+                                    Message::GotFiles,
+                                )
                             }
                         }
                     }
                 } else {
                     self.error_modal = Some("An error occurred".to_string());
-                    Command::none()
+                    Task::none()
                 }
             }
-            // perform AddUrl for every url input
             Message::AddAllUrls => {
                 let commands: Vec<_> = self
                     .url_input
                     .data
                     .keys()
                     .cloned()
-                    .map(|index| Command::perform(async move { index }, Message::AddUrl))
+                    .map(|index| Task::perform(async move { index }, Message::AddUrl))
                     .collect();
 
-                Command::batch(commands)
+                Task::batch(commands)
             }
-            // mega files were loaded from url
             Message::GotFiles(result) => {
                 match result {
                     // files were loaded successfully
@@ -329,9 +269,8 @@ impl Application for App {
                     }
                 }
 
-                Command::none()
+                Task::none()
             }
-            // add loaded files to download queue
             Message::AddFiles => {
                 // flatten file structure into a list of downloads
                 let downloads: Vec<Download> = self
@@ -353,9 +292,12 @@ impl Application for App {
                 }
 
                 self.route = Route::Home; // navigate to home
-                Command::perform(async {}, |_| Message::ClearFiles) // clear files
+                Task::perform(async {}, |_| Message::ClearFiles) // clear files
             }
-            // a download has either been started or stopped
+            Message::RunnerReady(sender) => {
+                self.runner_sender = Some(sender);
+                Task::none()
+            }
             Message::Runner(message) => {
                 match message {
                     RunnerMessage::Active(download) => {
@@ -382,23 +324,8 @@ impl Application for App {
                     RunnerMessage::Finished => (),
                 }
 
-                Command::none()
+                Task::none()
             }
-            // a message (error) from the mega backend
-            // Message::Mega(error) => {
-            //     match error {
-            //         MegaError::OutOfBandwidth => {
-            //             if !self.all_paused {
-            //                 self.error_modal = Some("Out of bandwidth".to_string());
-            //                 Command::perform(async {}, |_| Message::PauseDownloads)
-            //                 // pause downloads
-            //             } else {
-            //                 Command::none()
-            //             }
-            //         }
-            //     }
-            // }
-            // navigate to a route
             Message::Navigate(route) => {
                 match route {
                     Route::Home | Route::Import | Route::Settings => self.route = route,
@@ -412,9 +339,8 @@ impl Application for App {
                     }
                 }
 
-                Command::none()
+                Task::none()
             }
-            // toggle whether a file should be downloaded
             Message::ToggleFile(item) => {
                 // insert an entry for the file in the filter
                 self.file_filter.insert(item.1.node.handle.clone(), item.0);
@@ -424,9 +350,8 @@ impl Application for App {
                     self.file_filter.insert(file.node.handle.clone(), item.0);
                 });
 
-                Command::none()
+                Task::none()
             }
-            // text changed in url input
             Message::UrlInput((index, value)) => {
                 if let Some(input) = self.url_input.get_mut(index) {
                     input.value = value; // update input value
@@ -441,9 +366,8 @@ impl Application for App {
                     );
                 }
 
-                Command::none()
+                Task::none()
             }
-            // expand a folder in the file tree
             Message::ToggleExpanded(hash) => {
                 if let Some(expanded) = self.expanded_files.get_mut(&hash) {
                     // toggle expanded state if it already exists
@@ -453,42 +377,23 @@ impl Application for App {
                     self.expanded_files.insert(hash, true);
                 }
 
-                Command::none()
+                Task::none()
             }
-            // create a new url input
             Message::AddInput => {
                 self.url_input.insert(UrlInput {
                     value: String::new(),
                     status: UrlStatus::None,
                 });
 
-                Command::none()
+                Task::none()
             }
-            // remove a url input
             Message::RemoveInput(index) => {
                 self.url_input.remove(index);
-                Command::none()
+                Task::none()
             }
-            // loop that makes spinner spin
-            Message::Tick(index) => {
-                if let Some(input) = self.url_input.data.get_mut(&index)
-                    && let UrlStatus::Loading(ref mut angle) = input.status
-                {
-                    *angle = (*angle + 0.2) % (std::f32::consts::TAU);
-                    return Command::perform(
-                        async move {
-                            sleep(Duration::from_millis(10)).await;
-                            index
-                        },
-                        Message::Tick,
-                    );
-                }
-                Command::none()
-            }
-            // close error modal
             Message::CloseModal => {
                 self.error_modal = None;
-                Command::none()
+                Task::none()
             }
             Message::CancelDownloads => {
                 // stop the workers
@@ -501,13 +406,13 @@ impl Application for App {
                 for (_, download) in self.active_downloads.drain() {
                     download.cancel();
                 }
-                Command::none()
+                Task::none()
             }
             Message::CancelDownload(id) => {
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.cancel();
                 }
-                Command::none()
+                Task::none()
             }
             Message::PauseDownloads => {
                 self.all_paused = true; // set all paused flag for UI purposes
@@ -515,27 +420,27 @@ impl Application for App {
                 for (_, download) in self.active_downloads.iter() {
                     download.pause();
                 }
-                Command::none()
+                Task::none()
             }
             Message::PauseDownload(id) => {
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.pause();
                 }
-                Command::none()
+                Task::none()
             }
             Message::ResumeDownloads => {
                 self.all_paused = false;
                 for (_, download) in self.active_downloads.iter() {
                     download.resume();
                 }
-                Command::none()
+                Task::none()
             }
             Message::ResumeDownload(id) => {
                 self.all_paused = false; // all downloads can't be paused if we're resuming one
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.resume();
                 }
-                Command::none()
+                Task::none()
             }
             Message::RebuildMega => {
                 // if the worker is active, do not rebuild
@@ -544,7 +449,7 @@ impl Application for App {
                         "Cannot apply these configuration changes while downloads are active"
                             .to_string(),
                     );
-                    return Command::none();
+                    return Task::none();
                 }
 
                 // build a new mega client
@@ -552,11 +457,11 @@ impl Application for App {
                     Ok(mega) => {
                         self.mega = mega; // set the new mega client
                         self.rebuild_available = false; // rebuild is no longer available
-                        Command::perform(async {}, |_| Message::SaveConfig) // save the config
+                        Task::perform(async {}, |_| Message::SaveConfig) // save the config
                     }
                     Err(error) => {
                         self.error_modal = Some(format!("Failed to build mega client: {}", error));
-                        Command::none()
+                        Task::none()
                     }
                 }
             }
@@ -597,13 +502,13 @@ impl Application for App {
                 }
 
                 self.rebuild_available = true; // there are changes that can be applied now
-                Command::none()
+                Task::none()
             }
             Message::SaveConfig => {
                 for proxy in &self.config.proxies {
                     if !self.proxy_regex.is_match(proxy) {
                         self.error_modal = Some(format!("Invalid proxy url: {}", proxy));
-                        return Command::none();
+                        return Task::none();
                     }
                 }
 
@@ -612,16 +517,16 @@ impl Application for App {
                     self.error_modal = Some(format!("Failed to save configuration: {}", error));
                 }
 
-                Command::none()
+                Task::none()
             }
             Message::ResetConfig => {
                 self.config = Config::default();
                 self.rebuild_available = true;
-                Command::none()
+                Task::none()
             }
             Message::ThemeChanged(theme) => {
-                self.config.theme = theme;
-                Command::none()
+                self.config.set_theme(theme);
+                Task::none()
             }
             Message::ProxyModeChanged(proxy_mode) => {
                 if proxy_mode == ProxyMode::Single {
@@ -630,7 +535,7 @@ impl Application for App {
                 }
                 self.config.proxy_mode = proxy_mode; // update the config
                 self.rebuild_available = true; // there are changes that can be applied now
-                Command::none()
+                Task::none()
             }
             Message::ProxyUrlChanged(value) => {
                 if let Some(proxy_url) = self.config.proxies.get_mut(0) {
@@ -641,7 +546,7 @@ impl Application for App {
                     self.config.proxies.push(value);
                 }
                 self.rebuild_available = true; // there are changes that can be applied now
-                Command::none()
+                Task::none()
             }
             Message::AddProxies => {
                 if let Ok(Some(file_path)) = FileDialog::new()
@@ -666,12 +571,12 @@ impl Application for App {
                     };
                 }
 
-                Command::none()
+                Task::none()
             }
             Message::RemoveProxy(index) => {
                 self.config.proxies.remove(index); // remove the proxy
                 self.rebuild_available = true; // there are changes that can be applied now
-                Command::none()
+                Task::none()
             }
             Message::ClearFiles => {
                 self.files.clear(); // clear files
@@ -687,12 +592,12 @@ impl Application for App {
                     self.route = Route::Import;
                 }
 
-                Command::none()
+                Task::none()
             }
         }
     }
 
-    fn view(&self) -> Element<'_, Self::Message, Renderer<Self::Theme>> {
+    pub fn view(&self) -> Element<'_, Message> {
         // build content
         let content = match self.route {
             Route::Home => {
@@ -716,24 +621,22 @@ impl Application for App {
                             Row::new()
                                 .height(Length::Fixed(35_f32))
                                 .width(Length::Fill)
-                                .align_items(Alignment::Center)
-                                .push(Space::new(Length::Fixed(7_f32), Length::Shrink))
+                                .align_y(Alignment::Center)
+                                .push(space::horizontal().width(Length::Fixed(7_f32)))
                                 .push(
                                     text(&download.node.name)
                                         .width(Length::Fill)
                                         .height(Length::Fill)
-                                        .vertical_alignment(Vertical::Center),
+                                        .align_y(Vertical::Center),
                                 )
-                                .push(Space::new(Length::Fixed(3_f32), Length::Shrink))
+                                .push(space::horizontal().width(Length::Fixed(3_f32)))
                                 .push(
                                     progress_bar(0_f32..=1_f32, progress)
-                                        .style(theme::ProgressBar::Custom(Box::new(
-                                            styles::progress_bar::ProgressBar,
-                                        )))
-                                        .width(Length::Fixed(80_f32))
-                                        .height(Length::Fixed(15_f32)),
+                                        .style(progress_bar::danger)
+                                        .length(Length::Fixed(80_f32))
+                                        .girth(Length::Fixed(15_f32)),
                                 )
-                                .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
+                                .push(space::horizontal().width(Length::Fixed(10_f32)))
                                 .push(
                                     text(
                                         format!("{} MB/s", pad_f32(download.speed()))
@@ -741,21 +644,19 @@ impl Application for App {
                                     )
                                     .width(Length::Shrink)
                                     .height(Length::Fill)
-                                    .vertical_alignment(Vertical::Center)
-                                    .font(Font::External {
-                                        name: "Inconsolata",
-                                        bytes: INCONSOLATA_MEDIUM,
+                                    .align_y(Vertical::Center)
+                                    .font(Font {
+                                        family: iced::font::Family::Name("Inconsolata"),
+                                        ..Font::DEFAULT
                                     })
                                     .size(16),
                                 )
-                                .push(Space::new(Length::Fixed(5_f32), Length::Shrink))
+                                .push(space::horizontal().width(Length::Fixed(5_f32)))
                                 .push(icon_button(X_ICON, Message::CancelDownload(id.clone())))
                                 .push(pause_button)
-                                .push(Space::new(Length::Fixed(7_f32), Length::Shrink)),
+                                .push(space::horizontal().width(Length::Fixed(7_f32))),
                         )
-                        .style(theme::Container::Custom(Box::new(
-                            styles::container::Download { index },
-                        ))),
+                        .style(move |theme| styles::container::Download { index }.style(theme)),
                     );
                 }
 
@@ -764,17 +665,14 @@ impl Application for App {
                         text("No active downloads")
                             .height(Length::Fixed(30_f32))
                             .width(Length::Fixed(165_f32))
-                            .vertical_alignment(Vertical::Center)
-                            .horizontal_alignment(Horizontal::Center),
+                            .align_y(Vertical::Center)
+                            .align_x(Horizontal::Center),
                     )
                 }
 
                 let mut download_group = Column::new().push(
                     scrollable(download_list)
-                        .vertical_scroll(Properties::default().width(5).scroller_width(5).margin(0))
-                        .style(theme::Scrollable::Custom(Box::new(
-                            styles::scrollable::Scrollable,
-                        )))
+                        // .(Properties::default().width(5).scroller_width(5).margin(0))
                         .height(Length::Fill),
                 );
 
@@ -788,46 +686,49 @@ impl Application for App {
                             .push(if self.all_paused {
                                 button(" Resume All ")
                                     .on_press(Message::ResumeDownloads)
-                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .style(button::danger)
                             } else {
                                 button(" Pause All ")
                                     .on_press(Message::PauseDownloads)
-                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .style(button::danger)
                             })
                             .push(
                                 button(" Cancel All ")
                                     .on_press(Message::CancelDownloads)
-                                    .style(theme::Button::Custom(Box::new(
-                                        styles::button::WarningButton,
-                                    ))),
+                                    .style(button::warning),
                             )
                             .push(
                                 container(
                                     text(format!(" {bandwidth_gb:.2} GB used ").replace('0', "O"))
-                                        .font(Font::External {
-                                            name: "Inconsolata",
-                                            bytes: INCONSOLATA_MEDIUM,
+                                        .font(Font {
+                                            family: iced::font::Family::Name("Inconsolata"),
+                                            ..Font::DEFAULT
                                         })
-                                        .vertical_alignment(Vertical::Center)
+                                        .align_y(Vertical::Center)
                                         .height(Length::Fill),
                                 )
-                                .style(theme::Container::Custom(Box::new(styles::container::Pill)))
+                                .style(|theme: &Theme| {
+                                    let palette = theme.extended_palette();
+                                    container::Style {
+                                        background: Some(palette.background.weak.color.into()),
+                                        border: Border::default().rounded(4.0),
+                                        ..Default::default()
+                                    }
+                                })
                                 .height(Length::Fill),
                             ),
                     )
                 }
 
-                let mut error_log = Column::new().push(scrollable(self.error_log()).style(
-                    theme::Scrollable::Custom(Box::new(styles::scrollable::Scrollable)),
-                ));
+                let mut error_log = Column::new().push(scrollable(self.error_log()));
 
                 if self.errors.is_empty() {
                     error_log = error_log.push(
                         text("No errors")
                             .height(Length::Fixed(30_f32))
                             .width(Length::Fixed(70_f32))
-                            .vertical_alignment(Vertical::Center)
-                            .horizontal_alignment(Horizontal::Center),
+                            .align_y(Vertical::Center)
+                            .align_x(Horizontal::Center),
                     )
                 }
 
@@ -838,18 +739,14 @@ impl Application for App {
                         .spacing(5)
                         .push(
                             container(download_group)
-                                .style(theme::Container::Custom(Box::new(
-                                    styles::container::DownloadList,
-                                )))
+                                .style(container::bordered_box)
                                 .padding(2)
                                 .width(Length::Fill)
                                 .height(Length::FillPortion(2)),
                         )
                         .push(
                             container(error_log)
-                                .style(theme::Container::Custom(Box::new(
-                                    styles::container::DownloadList,
-                                )))
+                                .style(container::bordered_box)
                                 .padding(8)
                                 .width(Length::Fill)
                                 .height(Length::FillPortion(1)),
@@ -859,29 +756,23 @@ impl Application for App {
             Route::Import => container(
                 Column::new()
                     .spacing(5)
-                    .push(
-                        scrollable(self.url_inputs())
-                            .style(theme::Scrollable::Custom(Box::new(
-                                styles::scrollable::Scrollable,
-                            )))
-                            .height(Length::Fill),
-                    )
+                    .push(scrollable(self.url_inputs()).height(Length::Fill))
                     .push(
                         Row::new()
                             .spacing(10)
                             .push(
                                 button(" Add from clipboard ")
-                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .style(button::danger)
                                     .on_press(Message::AddUrlClipboard),
                             )
                             .push(
                                 button(" + ")
-                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .style(button::danger)
                                     .on_press(Message::AddInput),
                             )
                             .push(
                                 button(" Load all ")
-                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .style(button::danger)
                                     .on_press(Message::AddAllUrls),
                             ),
                     ),
@@ -912,41 +803,41 @@ impl Application for App {
                                 .spacing(10)
                                 .push(
                                     button(" Add to queue ")
-                                        .style(theme::Button::Custom(Box::new(
-                                            styles::button::Button,
-                                        )))
+                                        .style(button::danger)
                                         .on_press(Message::AddFiles),
                                 )
                                 .push(
                                     button(" Cancel ")
-                                        .style(theme::Button::Custom(Box::new(
-                                            styles::button::Button,
-                                        )))
+                                        .style(button::danger)
                                         .on_press(Message::ClearFiles),
                                 )
                                 .push(
                                     container(
-                                        Text::new(format!(" {:.2} GB ", size_gb).replace('0', "O"))
-                                            .font(Font::External {
-                                                name: "Inconsolata",
-                                                bytes: INCONSOLATA_MEDIUM,
+                                        text(format!(" {:.2} GB ", size_gb).replace('0', "O"))
+                                            .font(Font {
+                                                family: iced::font::Family::Name("Inconsolata"),
+                                                ..Font::DEFAULT
                                             })
-                                            .vertical_alignment(Vertical::Center)
-                                            .horizontal_alignment(Horizontal::Center)
+                                            .align_y(Vertical::Center)
+                                            .align_x(Horizontal::Center)
                                             .width(Length::Fill)
                                             .height(Length::Fill),
                                     )
-                                    .style(theme::Container::Custom(Box::new(
-                                        styles::container::Pill,
-                                    )))
+                                    .style(|theme: &Theme| {
+                                        let palette = theme.extended_palette();
+                                        container::Style {
+                                            background: Some(palette.background.weak.color.into()),
+                                            border: Border::default().rounded(4.0),
+                                            ..Default::default()
+                                        }
+                                    })
                                     .height(Length::Fill),
                                 ),
                         ),
                 )
             }
             Route::Settings => {
-                let mut apply_button = button(" Apply ")
-                    .style(theme::Button::Custom(Box::new(styles::button::Button)));
+                let mut apply_button = button(" Apply ").style(button::danger);
 
                 if self.rebuild_available {
                     apply_button = apply_button.on_press(Message::RebuildMega);
@@ -991,41 +882,46 @@ impl Application for App {
                             self.config.min_retry_delay.as_millis() as f64..=60000_f64,
                             "Max Retry delay:",
                         ))
-                        .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
-                        .push(self.settings_picklist(
-                            "Theme",
-                            &Theme::ALL[..],
-                            Some(self.config.theme),
-                            Message::ThemeChanged,
-                        ))
-                        .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
+                        .push(space::vertical().height(Length::Fixed(10_f32)))
+                        .push(
+                            Row::new()
+                                .height(Length::Fixed(30_f32))
+                                .push(space::horizontal().width(Length::Fixed(8_f32)))
+                                .push(text("Theme").align_y(Vertical::Center).height(Length::Fill))
+                                .push(space::horizontal())
+                                .push(
+                                    pick_list(
+                                        Theme::ALL,
+                                        Some(self.config.get_theme()),
+                                        Message::ThemeChanged,
+                                    )
+                                    .width(Length::Fixed(170_f32)),
+                                ),
+                        )
+                        .push(space::vertical().height(Length::Fixed(10_f32)))
                         .push(self.settings_picklist(
                             "Proxy Mode",
                             &ProxyMode::ALL[..],
                             Some(self.config.proxy_mode),
                             Message::ProxyModeChanged,
                         ))
-                        .push(Space::new(Length::Shrink, Length::Fixed(10_f32)))
+                        .push(space::vertical().height(Length::Fixed(10_f32)))
                         .push(self.proxy_selector())
-                        .push(Space::new(Length::Shrink, Length::Fill))
+                        .push(space::vertical().height(Length::Fill))
                         .push(
                             Row::new()
-                                .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
+                                .push(space::horizontal().width(Length::Fixed(8_f32)))
                                 .push(
                                     button(" Save ")
-                                        .style(theme::Button::Custom(Box::new(
-                                            styles::button::Button,
-                                        )))
+                                        .style(button::danger)
                                         .on_press(Message::SaveConfig),
                                 )
-                                .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
+                                .push(space::horizontal().width(Length::Fixed(10_f32)))
                                 .push(apply_button)
-                                .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
+                                .push(space::horizontal().width(Length::Fixed(10_f32)))
                                 .push(
                                     button(" Reset ")
-                                        .style(theme::Button::Custom(Box::new(
-                                            styles::button::WarningButton,
-                                        )))
+                                        .style(button::warning)
                                         .on_press(Message::ResetConfig),
                                 ),
                         ),
@@ -1034,6 +930,7 @@ impl Application for App {
         };
 
         // nav + content = body
+        let nav_theme = self.config.get_theme();
         let body = container(
             Row::new()
                 .push(
@@ -1041,56 +938,79 @@ impl Application for App {
                         Column::new()
                             .padding(4)
                             .spacing(4)
-                            .push(self.nav_button("Home", Route::Home, false))
-                            .push(self.nav_button("Import", Route::Import, false))
+                            .push(self.nav_button(&nav_theme, "Home", Route::Home, false))
+                            .push(self.nav_button(&nav_theme, "Import", Route::Import, false))
                             .push(self.nav_button(
+                                &nav_theme,
                                 "Choose files",
                                 Route::ChooseFiles,
                                 self.files.is_empty(),
                             ))
-                            .push(Space::new(Length::Shrink, Length::Fill))
-                            .push(self.nav_button("Settings", Route::Settings, false)),
+                            .push(space::vertical().height(Length::Fill))
+                            .push(self.nav_button(&nav_theme, "Settings", Route::Settings, false)),
                     )
                     .width(Length::Fixed(170_f32))
                     .height(Length::Fill)
-                    .style(theme::Container::Custom(Box::new(styles::container::Nav))),
+                    .style(|theme: &Theme| {
+                        let palette = theme.extended_palette();
+                        container::Style {
+                            background: Some(palette.background.weak.color.into()),
+                            ..Default::default()
+                        }
+                    }),
                 )
                 .push(content.padding(10).width(Length::Fill)),
         )
-        .style(theme::Container::Custom(Box::new(styles::container::Body)))
         .width(Length::Fill)
         .height(Length::Fill);
 
         if let Some(error_message) = &self.error_modal {
-            container(Modal::new(
+            let theme = self.config.get_theme();
+            let error_color = theme.extended_palette().danger.strong.color;
+            stack![
                 body,
-                container(
-                    Column::new()
-                        .spacing(5)
-                        .push(
-                            text(error_message)
-                                .style(theme::Text::Color(Color::from_rgb8(255, 69, 0)))
-                                .vertical_alignment(Vertical::Center)
-                                .horizontal_alignment(Horizontal::Center),
-                        )
-                        .push(Space::new(Length::Fixed(100_f32), Length::Fixed(2_f32)))
-                        .push(
-                            Row::new()
-                                .spacing(5)
-                                .push(Space::new(Length::FillPortion(3), Length::Shrink))
-                                .push(
-                                    button(" Ok ")
-                                        .style(theme::Button::Custom(Box::new(
-                                            styles::button::Button,
-                                        )))
-                                        .on_press(Message::CloseModal), // .width(Length::FillPortion(1))
-                                ),
-                        ),
+                opaque(
+                    mouse_area(
+                        center(opaque(
+                            container(
+                                Column::new()
+                                    .spacing(5)
+                                    .push(
+                                        text(error_message)
+                                            .color(error_color)
+                                            .align_y(Vertical::Center)
+                                            .align_x(Horizontal::Center),
+                                    )
+                                    .push(space::horizontal().width(Length::Fixed(100_f32)))
+                                    .push(
+                                        Row::new()
+                                            .spacing(5)
+                                            .push(space::horizontal().width(Length::FillPortion(3)))
+                                            .push(
+                                                button(" Ok ")
+                                                    .style(button::danger)
+                                                    .on_press(Message::CloseModal),
+                                            ),
+                                    ),
+                            )
+                            .width(Length::Fixed(150_f32))
+                            .padding(10)
+                            .style(container::rounded_box)
+                        ))
+                        .style(|_theme| container::Style {
+                            background: Some(
+                                Color {
+                                    a: 0.5,
+                                    ..Color::BLACK
+                                }
+                                .into(),
+                            ),
+                            ..container::Style::default()
+                        })
+                    )
+                    .on_press(Message::CloseModal)
                 )
-                .width(Length::Fixed(150_f32))
-                .padding(10)
-                .style(theme::Container::Custom(Box::new(styles::container::Modal))),
-            ))
+            ]
             .into()
         } else {
             body.into()
@@ -1098,36 +1018,15 @@ impl Application for App {
     }
 
     // determines the correct Theme based on configuration & system settings
-    fn theme(&self) -> Self::Theme {
-        match self.config.theme {
-            Theme::System => match dark_light::detect() {
-                dark_light::Mode::Light => iced::Theme::Light,
-                _ => iced::Theme::Dark, // Default and Dark map to Dark
-            },
-            Theme::Light => iced::Theme::Light,
-            Theme::Dark => iced::Theme::Dark,
-        }
+    pub fn theme(&self) -> Option<Theme> {
+        // Return None for system theme (Iced 0.14 handles this automatically)
+        // For explicit theme selection, return Some(theme)
+        Some(self.config.get_theme())
     }
 
-    fn subscription(&self) -> Subscription<Self::Message> {
+    pub fn subscription(&self) -> Subscription<Message> {
         // reads runner messages from channel and sends them to the UI
-        let runner_subscription = iced::subscription::unfold(
-            "runner messages",
-            self.runner_receiver.take(),
-            move |mut receiver| async move {
-                let msg = if let Some(receiver) = receiver.as_mut() {
-                    if let Some(msg) = receiver.recv().await {
-                        msg
-                    } else {
-                        RunnerMessage::Finished
-                    }
-                } else {
-                    RunnerMessage::Finished
-                };
-
-                (Message::Runner(msg), receiver)
-            },
-        );
+        let runner_subscription = Subscription::run(runner_worker);
 
         // forces the UI to refresh every second
         // this is needed because changes to the active downloads don't trigger a refresh
@@ -1143,7 +1042,6 @@ impl From<Config> for App {
     fn from(config: Config) -> Self {
         // build the mega client
         let mega = mega_builder(&config).unwrap();
-        let (runner_sender, runner_receiver) = channel(64);
         let (download_sender, download_receiver) = kanal::unbounded();
 
         Self {
@@ -1151,8 +1049,7 @@ impl From<Config> for App {
             mega,
             worker: None,
             active_downloads: HashMap::new(),
-            runner_sender,
-            runner_receiver: RefCell::new(Some(runner_receiver)),
+            runner_sender: None,
             download_sender,
             download_receiver: download_receiver.to_async(),
             files: Vec::new(),
@@ -1171,6 +1068,35 @@ impl From<Config> for App {
     }
 }
 
+fn runner_worker() -> impl Stream<Item = Message> {
+    stream::channel(100, async |mut output| {
+        // Create tokio channel for workers
+        let (sender, mut receiver) = tokio_channel::<RunnerMessage>(64);
+
+        // Send the sender back to the application
+        if output.send(Message::RunnerReady(sender)).await.is_err() {
+            return;
+        }
+
+        loop {
+            // Read next message from workers
+            let msg = if let Some(msg) = receiver.recv().await {
+                msg
+            } else {
+                RunnerMessage::Finished
+            };
+
+            // Forward message to UI
+            let is_finished = matches!(msg, RunnerMessage::Finished)
+                | output.send(Message::Runner(msg)).await.is_err();
+
+            if is_finished {
+                break;
+            }
+        }
+    })
+}
+
 impl App {
     fn recursive_files<'a>(&self, file: &'a MegaFile) -> Element<'a, Message> {
         if file.children.is_empty() {
@@ -1179,17 +1105,12 @@ impl App {
                 .push(
                     text(&file.node.name)
                         .width(Length::Fill)
-                        .vertical_alignment(Vertical::Center),
+                        .align_y(Vertical::Center),
                 )
                 .push(
-                    checkbox(
-                        "",
-                        *self.file_filter.get(&file.node.handle).unwrap_or(&true),
-                        |value| Message::ToggleFile(Box::new((value, file.clone()))),
-                    )
-                    .style(theme::Checkbox::Custom(Box::new(
-                        styles::checkbox::Checkbox,
-                    ))),
+                    checkbox(*self.file_filter.get(&file.node.handle).unwrap_or(&true))
+                        .on_toggle(|value| Message::ToggleFile(Box::new((value, file.clone()))))
+                        .style(checkbox::danger),
                 )
                 .into()
         } else {
@@ -1208,24 +1129,19 @@ impl App {
                             .height(Length::Fixed(16_f32))
                             .width(Length::Fixed(16_f32)),
                         )
-                        .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+                        .style(|theme, status| styles::button::IconButton.style(theme, status))
                         .on_press(Message::ToggleExpanded(file.node.handle.clone()))
                         .padding(3),
                     )
                     .push(
                         text(&file.node.name)
                             .width(Length::Fill)
-                            .vertical_alignment(Vertical::Center),
+                            .align_y(Vertical::Center),
                     )
                     .push(
-                        checkbox(
-                            "",
-                            *self.file_filter.get(&file.node.handle).unwrap_or(&true),
-                            |value| Message::ToggleFile(Box::new((value, file.clone()))),
-                        )
-                        .style(theme::Checkbox::Custom(Box::new(
-                            styles::checkbox::Checkbox,
-                        ))),
+                        checkbox(*self.file_filter.get(&file.node.handle).unwrap_or(&true))
+                            .on_toggle(|value| Message::ToggleFile(Box::new((value, file.clone()))))
+                            .style(checkbox::danger),
                     ),
             );
 
@@ -1233,7 +1149,7 @@ impl App {
                 for file in &file.children {
                     column = column.push(
                         Row::new()
-                            .push(Space::new(Length::Fixed(20.0), Length::Shrink))
+                            .push(space::horizontal().width(Length::Fixed(20.0)))
                             .push(self.recursive_files(file)),
                     );
                 }
@@ -1243,28 +1159,36 @@ impl App {
         }
     }
 
-    fn nav_button<'a>(&self, label: &'a str, route: Route, disabled: bool) -> Element<'a, Message> {
+    fn nav_button<'a>(
+        &self,
+        theme: &Theme,
+        label: &'a str,
+        route: Route,
+        disabled: bool,
+    ) -> Element<'a, Message> {
+        let palette = theme.extended_palette();
         let style = if disabled {
-            styles::svg::SvgIcon::new(Color::from_rgb8(235, 28, 48).into())
+            styles::svg::SvgIcon::new(palette.danger.base.color.into())
         } else {
-            styles::svg::SvgIcon::new(Color::from_rgb8(255, 48, 78).into())
+            styles::svg::SvgIcon::new(palette.danger.strong.color.into())
         };
 
         let mut row = Row::new()
-            .align_items(Alignment::Center)
+            .align_y(Alignment::Center)
             .height(Length::Fixed(40_f32));
 
         if self.route == route {
+            let style = style.clone();
             row = row
                 .push(
                     svg(svg::Handle::from_memory(SELECTED_ICON))
-                        .style(theme::Svg::Custom(Box::new(style.clone())))
+                        .style(move |theme, status| style.style(theme, status))
                         .width(Length::Fixed(4_f32))
                         .height(Length::Fixed(25_f32)),
                 )
-                .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
+                .push(space::horizontal().width(Length::Fixed(8_f32)))
         } else {
-            row = row.push(Space::new(Length::Fixed(12_f32), Length::Shrink))
+            row = row.push(space::horizontal().width(Length::Fixed(12_f32)))
         }
 
         let handle = match route {
@@ -1280,19 +1204,21 @@ impl App {
                     svg(handle)
                         .width(Length::Fixed(28_f32))
                         .height(Length::Fixed(28_f32))
-                        .style(theme::Svg::Custom(Box::new(style))),
+                        .style(move |theme, status| style.style(theme, status)),
                 )
                 .padding(4)
-                .style(theme::Container::Custom(Box::new(
-                    styles::container::Icon::new(self.route == route),
-                ))),
+                .style({
+                    let is_active = self.route == route;
+                    move |theme| styles::container::Icon::new(is_active).style(theme)
+                }),
             )
-            .push(Space::new(Length::Fixed(12_f32), Length::Shrink));
+            .push(space::horizontal().width(Length::Fixed(12_f32)));
 
+        let nav_style = styles::button::Nav {
+            active: self.route == route,
+        };
         let mut button = button(row.push(text(label)))
-            .style(theme::Button::Custom(Box::new(styles::button::Nav {
-                active: self.route == route,
-            })))
+            .style(move |theme, status| nav_style.style(theme, status))
             .width(Length::Fill)
             .padding(0);
 
@@ -1304,11 +1230,12 @@ impl App {
     }
 
     fn error_log(&self) -> Element<'_, Message> {
+        let theme = self.config.get_theme();
+        let error_color = theme.extended_palette().danger.strong.color;
         let mut column = Column::new().spacing(2).width(Length::Fill);
 
         for error in &self.errors {
-            column =
-                column.push(text(error).style(theme::Text::Color(Color::from_rgb8(255, 69, 0))));
+            column = column.push(text(error).color(error_color));
         }
 
         column.into()
@@ -1318,10 +1245,9 @@ impl App {
         let mut inputs = Column::new().spacing(5);
 
         for (index, input) in self.url_input.data.iter() {
+            let url_input_style = styles::text_input::UrlInput { mode: input.status };
             let mut text_input = text_input("Url", &input.value)
-                .style(theme::TextInput::Custom(Box::new(
-                    styles::text_input::UrlInput { mode: input.status },
-                )))
+                .style(move |theme, status| url_input_style.style(theme, status))
                 .size(18)
                 .padding(8);
 
@@ -1333,7 +1259,7 @@ impl App {
 
             let mut row = Row::new()
                 .spacing(5)
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .push(text_input);
 
             match input.status {
@@ -1344,17 +1270,13 @@ impl App {
                                 .width(Length::Fixed(22_f32))
                                 .height(Length::Fixed(22_f32)),
                         )
-                        .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+                        .style(|theme, status| styles::button::IconButton.style(theme, status))
                         .on_press(Message::RemoveInput(*index))
                         .padding(4),
                     );
                 }
-                UrlStatus::Loading(angle) => {
-                    row = row.push(
-                        canvas(LoadingWheel::new(angle))
-                            .width(Length::Fixed(30_f32))
-                            .height(Length::Fixed(30_f32)),
-                    );
+                UrlStatus::Loading => {
+                    row = row.push(Circular::new().size(30.0).bar_height(3.0));
                 }
                 UrlStatus::Loaded => {
                     row = row.push(
@@ -1383,30 +1305,26 @@ impl App {
     ) -> Element<'a, Message> {
         Row::new()
             .height(Length::Fixed(30_f32))
-            .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
-            .push(
-                text(label)
-                    .vertical_alignment(Vertical::Center)
-                    .height(Length::Fill),
-            )
-            .push(Space::new(Length::Fill, Length::Shrink))
+            .push(space::horizontal().width(Length::Fixed(8_f32)))
+            .push(text(label).align_y(Vertical::Center).height(Length::Fill))
+            .push(space::horizontal())
             .push(
                 text(pad_usize(value).replace('0', "O"))
-                    .font(Font::External {
-                        name: "Inconsolata",
-                        bytes: INCONSOLATA_MEDIUM,
+                    .font(Font {
+                        family: iced::font::Family::Name("Inconsolata"),
+                        ..Font::DEFAULT
                     })
-                    .vertical_alignment(Vertical::Center)
+                    .align_y(Vertical::Center)
                     .height(Length::Fill),
             )
-            .push(Space::new(Length::Fixed(10_f32), Length::Shrink))
+            .push(space::horizontal().width(Length::Fixed(10_f32)))
             .push(
-                Slider::new(range, value as f64, move |value| {
+                slider(range, value as f64, move |value| {
                     Message::SettingsSlider((index, value))
                 })
                 .width(Length::Fixed(130_f32))
                 .height(30)
-                .style(theme::Slider::Custom(Box::new(styles::slider::Slider))),
+                .style(styles::slider::slider_style),
             )
             .into()
     }
@@ -1414,7 +1332,7 @@ impl App {
     fn settings_picklist<'a, T>(
         &self,
         label: &'a str,
-        options: impl Into<Cow<'a, [T]>>,
+        options: impl Into<Cow<'a, [T]>> + std::borrow::Borrow<[T]> + 'a,
         selected: Option<T>,
         message: fn(T) -> Message,
     ) -> Element<'a, Message>
@@ -1424,21 +1342,10 @@ impl App {
     {
         Row::new()
             .height(Length::Fixed(30_f32))
-            .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
-            .push(
-                text(label)
-                    .vertical_alignment(Vertical::Center)
-                    .height(Length::Fill),
-            )
-            .push(Space::new(Length::Fill, Length::Shrink))
-            .push(
-                pick_list(options, selected, message)
-                    .width(Length::Fixed(170_f32))
-                    .style(theme::PickList::Custom(
-                        Rc::new(styles::pick_list::PickList),
-                        Rc::new(styles::menu::Menu),
-                    )),
-            )
+            .push(space::horizontal().width(Length::Fixed(8_f32)))
+            .push(text(label).align_y(Vertical::Center).height(Length::Fill))
+            .push(space::horizontal())
+            .push(pick_list(options, selected, message).width(Length::Fixed(170_f32)))
             .into()
     }
 
@@ -1454,22 +1361,22 @@ impl App {
                         Row::new()
                             .padding(4)
                             .push(text(proxy))
-                            .push(Space::new(Length::Fill, Length::Shrink))
+                            .push(space::horizontal())
                             .push(
                                 button(
                                     svg(svg::Handle::from_memory(X_ICON))
                                         .width(Length::Fixed(15_f32))
                                         .height(Length::Fixed(15_f32)),
                                 )
-                                .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+                                .style(|theme, status| {
+                                    styles::button::IconButton.style(theme, status)
+                                })
                                 .on_press(Message::RemoveProxy(index))
                                 .padding(4),
                             )
-                            .push(Space::new(Length::Fixed(8_f32), Length::Shrink)),
+                            .push(space::horizontal().width(Length::Fixed(8_f32))),
                     )
-                    .style(theme::Container::Custom(Box::new(
-                        styles::container::Download { index },
-                    )))
+                    .style(move |theme: &Theme| styles::container::Download { index }.style(theme))
                     .width(Length::Fill),
                 )
             }
@@ -1479,8 +1386,8 @@ impl App {
                     text("No proxies")
                         .width(Length::Fixed(100_f32))
                         .height(Length::Fixed(35_f32))
-                        .vertical_alignment(Vertical::Center)
-                        .horizontal_alignment(Horizontal::Center),
+                        .align_y(Vertical::Center)
+                        .align_x(Horizontal::Center),
                 );
             }
 
@@ -1488,20 +1395,18 @@ impl App {
                 container(
                     Column::new()
                         .push(scrollable(proxy_display).height(Length::Fixed(125_f32)))
-                        .push(Space::new(Length::Shrink, Length::Fill))
+                        .push(space::vertical())
                         .push(
                             container(
                                 button(" Add proxies ")
                                     .on_press(Message::AddProxies)
-                                    .style(theme::Button::Custom(Box::new(styles::button::Button)))
+                                    .style(button::danger)
                                     .padding(4),
                             )
                             .padding(5),
                         ),
                 )
-                .style(theme::Container::Custom(Box::new(
-                    styles::container::DownloadList,
-                )))
+                .style(container::bordered_box)
                 .height(Length::Fixed(170_f32))
                 .padding(2),
             );
@@ -1512,30 +1417,35 @@ impl App {
                     self.config.proxies.first().unwrap_or(&String::new()),
                 )
                 .on_input(Message::ProxyUrlChanged)
-                .style(theme::TextInput::Custom(Box::new(
+                .style(|theme, status| {
                     styles::text_input::UrlInput {
                         mode: UrlStatus::None,
-                    },
-                )))
+                    }
+                    .style(theme, status)
+                })
                 .padding(6),
             );
         }
 
         Row::new()
-            .push(Space::new(Length::Fixed(8_f32), Length::Shrink))
+            .push(space::horizontal().width(Length::Fixed(8_f32)))
             .push(column)
             .into()
     }
 
     fn start_workers(&self, workers: usize) -> WorkerState {
         let cancel = CancellationToken::new();
+        let runner_sender = self
+            .runner_sender
+            .clone()
+            .expect("Runner sender not available - subscription may not be ready");
         WorkerState {
             handles: spawn_workers(
                 self.mega.clone(),
                 Arc::new(self.config.clone()),
                 self.download_receiver.clone(),
                 self.download_sender.clone_async(),
-                self.runner_sender.clone(),
+                runner_sender,
                 cancel.clone(),
                 workers,
             ),
@@ -1620,35 +1530,19 @@ struct WorkerState {
 }
 
 /// returns the settings for Iced, with the config inside
-pub(crate) fn settings() -> Settings<Config> {
-    Settings {
-        id: None,
-        window: Window {
-            size: (700, 550),
-            position: Default::default(),
-            min_size: Some((550, 500)),
-            max_size: None,
-            visible: true,
-            resizable: true,
-            decorations: true,
-            transparent: false,
-            always_on_top: false,
-            icon: None,
-            #[cfg(target_os = "macos")]
-            platform_specific: PlatformSpecific::default(),
-            #[cfg(target_os = "windows")]
-            platform_specific: PlatformSpecific::default(),
-            #[cfg(target_os = "linux")]
-            platform_specific: PlatformSpecific,
-        },
-        flags: Config::load().expect("failed to load config"),
-        default_font: Some(CABIN_REGULAR),
-        default_text_size: 20.0,
-        exit_on_close_request: true,
-        antialiasing: true,
-        text_multithreading: true,
-        try_opengles_first: false,
-    }
+pub(crate) fn settings() -> iced::Application<impl iced::Program<Message = Message, Theme = Theme>>
+{
+    iced::application(App::new, App::update, App::view)
+        .title(App::title)
+        .subscription(App::subscription)
+        .theme(App::theme)
+        .window_size((700.0, 550.0))
+        .font(CABIN_REGULAR)
+        .font(INCONSOLATA_MEDIUM)
+        .default_font(Font {
+            family: iced::font::Family::Name("Cabin"),
+            ..Font::DEFAULT
+        })
 }
 
 // build a new mega client from config
@@ -1692,7 +1586,7 @@ fn icon_button(icon: &'static [u8], message: Message) -> Element<'static, Messag
             .width(Length::Fixed(25_f32)),
     )
     .padding(4)
-    .style(theme::Button::Custom(Box::new(styles::button::IconButton)))
+    .style(|theme, status| styles::button::IconButton.style(theme, status))
     .on_press(message)
     .into()
 }

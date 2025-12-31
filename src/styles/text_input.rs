@@ -1,6 +1,5 @@
-use iced::widget::text_input;
-use iced::widget::text_input::Appearance;
-use iced::{Color, Theme};
+use iced::widget::text_input::{Status, Style};
+use iced::{Border, Theme, border};
 
 use crate::app::UrlStatus;
 
@@ -8,61 +7,39 @@ pub(crate) struct UrlInput {
     pub(crate) mode: UrlStatus,
 }
 
-impl text_input::StyleSheet for UrlInput {
-    type Style = Theme;
+impl UrlInput {
+    pub fn style(&self, theme: &Theme, status: Status) -> Style {
+        let palette = theme.extended_palette();
+        let border_color = match self.mode {
+            UrlStatus::Invalid => palette.danger.strong.color,
+            _ => palette.background.strong.color,
+        };
 
-    fn active(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            background: Color::from_rgb8(30, 30, 46).into(),
-            border_radius: 4.0,
-            border_width: 2.0,
-            border_color: match self.mode {
-                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0),
-                _ => Color::from_rgb8(46, 46, 46),
+        match status {
+            Status::Active | Status::Disabled => Style {
+                background: palette.background.weak.color.into(),
+                border: Border {
+                    radius: border::radius(4.0),
+                    width: 2.0,
+                    color: border_color,
+                },
+                icon: Default::default(),
+                placeholder: palette.background.weak.text.into(),
+                value: palette.background.base.text.into(),
+                selection: palette.primary.weak.color.into(),
             },
-            icon_color: Default::default(),
-        }
-    }
-
-    fn focused(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            background: Color::from_rgb8(20, 20, 36).into(),
-            border_radius: 4.0,
-            border_width: 2.0,
-            border_color: match self.mode {
-                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0),
-                _ => Color::from_rgb8(42, 42, 42),
+            Status::Focused { .. } | Status::Hovered => Style {
+                background: palette.background.base.color.into(),
+                border: Border {
+                    radius: border::radius(4.0),
+                    width: 2.0,
+                    color: border_color,
+                },
+                icon: Default::default(),
+                placeholder: palette.background.weak.text.into(),
+                value: palette.background.base.text.into(),
+                selection: palette.primary.weak.color.into(),
             },
-            icon_color: Default::default(),
-        }
-    }
-
-    fn placeholder_color(&self, _style: &Self::Style) -> Color {
-        Color::from_rgb8(210, 210, 210)
-    }
-
-    fn value_color(&self, _style: &Self::Style) -> Color {
-        Color::from_rgb8(227, 227, 227)
-    }
-
-    fn disabled_color(&self, _style: &Self::Style) -> Color {
-        Color::from_rgb8(117, 117, 117)
-    }
-
-    fn selection_color(&self, _style: &Self::Style) -> Color {
-        Color::from_rgb8(0, 120, 212)
-    }
-
-    fn disabled(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            background: Color::from_rgb8(20, 20, 30).into(),
-            border_radius: 4.0,
-            border_width: 2.0,
-            border_color: match self.mode {
-                UrlStatus::Invalid => Color::from_rgb8(255, 69, 0),
-                _ => Color::from_rgb8(42, 42, 42),
-            },
-            icon_color: Default::default(),
         }
     }
 }

@@ -1,54 +1,40 @@
-use iced::{Color, Theme};
-use iced_native::widget::slider;
-use iced_native::widget::slider::{Appearance, Handle, HandleShape, Rail};
+use iced::Border;
+use iced::Theme;
+use iced::widget::slider::{Handle, HandleShape, Rail, Status, Style};
 
-pub(crate) struct Slider;
+pub(crate) fn slider_style(theme: &Theme, status: Status) -> Style {
+    let palette = theme.extended_palette();
+    let danger_color = palette.danger.strong.color;
 
-impl slider::StyleSheet for Slider {
-    type Style = Theme;
-
-    fn active(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
+    match status {
+        Status::Active | Status::Dragged => Style {
             rail: Rail {
-                colors: (Color::from_rgb8(255, 48, 78), Color::from_rgb8(255, 48, 78)),
+                backgrounds: (danger_color.into(), danger_color.into()),
                 width: 8_f32,
+                border: Border::default().rounded(4.0),
             },
             handle: Handle {
                 shape: HandleShape::Circle { radius: 10_f32 },
-                color: Color::from_rgb8(255, 48, 78),
+                background: danger_color.into(),
                 border_width: 5_f32,
-                border_color: Color::from_rgb8(69, 69, 69),
+                border_color: palette.background.weak.color,
             },
-        }
-    }
-
-    fn hovered(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
+        },
+        Status::Hovered => Style {
             rail: Rail {
-                colors: (Color::from_rgb8(255, 68, 98), Color::from_rgb8(255, 68, 98)),
+                backgrounds: (
+                    palette.danger.base.color.into(),
+                    palette.danger.base.color.into(),
+                ),
                 width: 8_f32,
+                border: Border::default().rounded(4.0),
             },
             handle: Handle {
                 shape: HandleShape::Circle { radius: 10_f32 },
-                color: Color::from_rgb8(255, 68, 98),
+                background: palette.danger.base.color.into(),
                 border_width: 4_f32,
-                border_color: Color::from_rgb8(69, 69, 69),
+                border_color: palette.background.weak.color,
             },
-        }
-    }
-
-    fn dragging(&self, _style: &Self::Style) -> Appearance {
-        Appearance {
-            rail: Rail {
-                colors: (Color::from_rgb8(235, 28, 58), Color::from_rgb8(235, 28, 58)),
-                width: 8_f32,
-            },
-            handle: Handle {
-                shape: HandleShape::Circle { radius: 10_f32 },
-                color: Color::from_rgb8(235, 28, 58),
-                border_width: 6_f32,
-                border_color: Color::from_rgb8(69, 69, 69),
-            },
-        }
+        },
     }
 }

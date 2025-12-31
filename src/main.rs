@@ -1,8 +1,7 @@
-use crate::app::{App, settings};
+use crate::app::settings;
 use crate::cli::run_cli;
 use crate::config::Config;
 use crate::mega_client::{MegaClient, Node, NodeKind};
-use iced::Application;
 use log::{LevelFilter, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,12 +20,11 @@ use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
 mod app;
+mod circular;
 mod cli;
 mod config;
-mod loading_wheel;
+mod easing;
 mod mega_client;
-mod modal;
-mod slider;
 mod styles;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
@@ -219,7 +217,7 @@ fn main() -> iced::Result {
         Ok(())
     } else {
         // No CLI args → launch GUI
-        App::run(settings())
+        settings().run()
     }
 }
 

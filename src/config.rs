@@ -1,5 +1,5 @@
 use crate::ProxyMode;
-use crate::app::Theme;
+use iced::Theme;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::fs::File;
@@ -38,7 +38,7 @@ impl Display for Error {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Config {
-    pub(crate) theme: Theme,
+    pub(crate) theme: String,
     pub(crate) max_workers: usize,
     pub(crate) concurrency_budget: usize,
     pub(crate) max_retries: u32,
@@ -53,8 +53,8 @@ pub(crate) struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: Theme::System,
-            max_workers: 16,
+            theme: "Dark".to_string(),
+            max_workers: 10,
             concurrency_budget: 10,
             max_retries: 3,
             timeout: Duration::from_secs(20),
@@ -116,5 +116,17 @@ impl Config {
         // never allow weight > budget
         let budget = self.weighted_concurrency_budget().max(1);
         raw_weight.min(budget)
+    }
+
+    pub(crate) fn get_theme(&self) -> Theme {
+        Theme::ALL
+            .iter()
+            .find(|t| t.to_string() == self.theme)
+            .cloned()
+            .unwrap_or(Theme::Dark)
+    }
+
+    pub(crate) fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme.to_string();
     }
 }
