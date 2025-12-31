@@ -1,4 +1,4 @@
-use crate::app::settings;
+use crate::app::build_app;
 use crate::cli::run_cli;
 use crate::config::Config;
 use crate::mega_client::{MegaClient, Node, NodeKind};
@@ -22,9 +22,11 @@ use tokio_util::sync::CancellationToken;
 mod app;
 mod cli;
 mod config;
+mod helpers;
 mod loading_wheel;
 mod mega_client;
 mod styles;
+mod resources;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
 
@@ -216,7 +218,7 @@ fn main() -> iced::Result {
         Ok(())
     } else {
         // No CLI args → launch GUI
-        settings().run()
+        build_app().run()
     }
 }
 
@@ -336,7 +338,7 @@ async fn worker(
                 if download.stop.is_cancelled() {
                     continue;
                 }
-                
+
                 let since_last_retry = download.last_tried_at.lock().await.as_ref().map(|i| i.elapsed());
                 if let Some(elapsed) = since_last_retry {
                     let retries = download.retries.load(Ordering::Relaxed);

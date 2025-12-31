@@ -6,14 +6,14 @@ pub(crate) struct Download {
 }
 
 impl Download {
-    pub fn style(&self, theme: &Theme) -> Style {
+    pub(crate) fn style(&self, theme: &Theme) -> Style {
         let palette = theme.extended_palette();
         Style {
             text_color: Some(palette.background.base.text),
             background: Some(if !self.index.is_multiple_of(2) {
-                palette.background.weak.color.into()
-            } else {
                 palette.background.base.color.into()
+            } else {
+                palette.background.strong.color.into()
             }),
             ..Default::default()
         }
@@ -29,12 +29,12 @@ impl Icon {
         Self { active }
     }
 
-    pub fn style(&self, theme: &Theme) -> Style {
+    pub(crate) fn style(&self, theme: &Theme) -> Style {
         let palette = theme.extended_palette();
         Style {
             text_color: None,
             background: if self.active {
-                Some(palette.background.base.color.into())
+                Some(palette.background.strong.color.into())
             } else {
                 None
             },

@@ -11,7 +11,7 @@ impl SvgIcon {
         Self { color }
     }
 
-    pub fn style(&self, _theme: &Theme, _status: Status) -> Style {
+    pub(crate) fn style(&self, _theme: &Theme, _status: Status) -> Style {
         Style { color: self.color }
     }
 }

@@ -32,11 +32,13 @@ impl LoadingWheelProgram {
         let radii = [3.0, 2.8, 2.6, 2.4, 2.0, 1.8, 1.4, 1.0];
 
         // Create 8 circles positioned at 45-degree intervals
-        for i in 0..8 {
+        for (i, radius) in radii.iter().enumerate() {
             let angle = (i as f32) * PI / 4.0;
-            let radius = radii[i];
             let position = Vector::new(angle.cos() * base_radius, angle.sin() * base_radius);
-            circles.push(Circle { radius, position });
+            circles.push(Circle {
+                radius: *radius,
+                position,
+            });
         }
 
         Self { circles }
@@ -79,9 +81,9 @@ struct State {
     last_update: Option<Instant>,
 }
 
-impl<'a, Message> Widget<Message, iced::Theme, Renderer> for LoadingWheelWidget
+impl<Message> Widget<Message, iced::Theme, Renderer> for LoadingWheelWidget
 where
-    Message: 'a + Clone,
+    Message: Clone,
 {
     fn size(&self) -> Size<Length> {
         Size {
@@ -169,7 +171,7 @@ where
                 // Increment angle proportionally (2π per second)
                 state.angle += elapsed.as_secs_f32() * 2.0 * PI;
                 // Wrap angle at 2π to prevent overflow
-                state.angle = state.angle % (2.0 * PI);
+                state.angle %= 2.0 * PI;
             }
             state.last_update = Some(*now);
             state.cache.clear();

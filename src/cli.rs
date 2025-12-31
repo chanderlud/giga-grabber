@@ -1,5 +1,5 @@
-use crate::app::mega_builder;
 use crate::config::Config;
+use crate::helpers::mega_builder;
 use crate::mega_client::NodeKind;
 use crate::{Download, RunnerMessage, get_files, spawn_workers};
 use anyhow::Result;

@@ -1,14 +1,12 @@
 use crate::config::Config;
+use crate::helpers::*;
+use crate::resources::*;
 use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::{MegaClient, NodeKind};
-use crate::{
-    Download, MegaFile, ProxyMode, RunnerMessage, WorkerHandle, get_files, spawn_workers, styles,
-};
+use crate::styles::svg::SvgIcon;
+use crate::{Download, MegaFile, ProxyMode, RunnerMessage, get_files, spawn_workers, styles};
 use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
-use iced::futures::Stream;
-use iced::futures::sink::SinkExt;
-use iced::stream;
 use iced::time::every;
 use iced::widget::{Column, Row, slider, space, svg};
 use iced::widget::{
@@ -20,7 +18,6 @@ use log::error;
 use native_dialog::FileDialog;
 use num_traits::cast::ToPrimitive;
 use regex::Regex;
-use reqwest::{Client, Proxy, Url};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -28,116 +25,8 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use tokio::sync::mpsc::{Sender as TokioSender, channel as tokio_channel};
+use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
-
-const CHECK_ICON: &[u8] = include_bytes!("../assets/check.svg");
-const COLLAPSE_ICON: &[u8] = include_bytes!("../assets/collapse.svg");
-const EXPAND_ICON: &[u8] = include_bytes!("../assets/expand.svg");
-const SELECTED_ICON: &[u8] = include_bytes!("../assets/selector.svg");
-const IMPORT_ICON: &[u8] = include_bytes!("../assets/import.svg");
-const CHOOSE_ICON: &[u8] = include_bytes!("../assets/choose.svg");
-const SETTINGS_ICON: &[u8] = include_bytes!("../assets/settings.svg");
-const HOME_ICON: &[u8] = include_bytes!("../assets/home.svg");
-const TRASH_ICON: &[u8] = include_bytes!("../assets/trash.svg");
-const X_ICON: &[u8] = include_bytes!("../assets/x.svg");
-const PAUSE_ICON: &[u8] = include_bytes!("../assets/pause.svg");
-const PLAY_ICON: &[u8] = include_bytes!("../assets/play.svg");
-
-const INCONSOLATA_MEDIUM: &[u8] =
-    include_bytes!("../assets/Inconsolata/static/Inconsolata-Medium.ttf");
-const CABIN_REGULAR: &[u8] = include_bytes!("../assets/Cabin/static/Cabin-Regular.ttf");
-
-#[derive(Debug, Clone)]
-pub(crate) enum Message {
-    // force the GUI to update
-    Refresh,
-    // add url from clipboard
-    AddUrlClipboard,
-    // got clipboard contents
-    GotClipboard(Option<String>),
-    // url added by user
-    AddUrl(usize),
-    // add all the urls
-    AddAllUrls,
-    // backend got files for url
-    GotFiles(Result<(Vec<MegaFile>, usize), usize>),
-    // user added files to download queue
-    AddFiles,
-    // received message from runner
-    Runner(RunnerMessage),
-    // runner subscription is ready, provides sender for workers
-    RunnerReady(TokioSender<RunnerMessage>),
-    // navigate to a different route
-    Navigate(Route),
-    // toggle file & children for download
-    ToggleFile(Box<(bool, MegaFile)>),
-    // when a character is changed in the url input
-    UrlInput((usize, String)),
-    // toggle expanded state of file tree
-    ToggleExpanded(String),
-    // create a new url input
-    AddInput,
-    // remove a url input
-    RemoveInput(usize),
-    // close the error modal
-    CloseModal,
-    // cancel all downloads
-    CancelDownloads,
-    // cancel download by id
-    CancelDownload(String),
-    // pause all downloads
-    PauseDownloads,
-    // pause download by id
-    PauseDownload(String),
-    // resume all downloads
-    ResumeDownloads,
-    // resume download by id
-    ResumeDownload(String),
-    // rebuild mega client with new config
-    RebuildMega,
-    // when a settings slider is changed, usize is index
-    SettingsSlider((usize, f64)),
-    // save current config to disk
-    SaveConfig,
-    // reset config to default
-    ResetConfig,
-    // theme changed
-    ThemeChanged(iced::Theme),
-    // proxy mode changed
-    ProxyModeChanged(ProxyMode),
-    // proxy url changed, single proxy mode
-    ProxyUrlChanged(String),
-    // add proxies from file
-    AddProxies,
-    // remove proxy
-    RemoveProxy(usize),
-    // remove any loaded files
-    ClearFiles,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Route {
-    Home,
-    Import,
-    ChooseFiles,
-    Settings,
-}
-
-#[derive(Default)]
-struct UrlInput {
-    value: String,
-    status: UrlStatus,
-}
-
-#[derive(PartialEq, Clone, Copy, Default)]
-pub(crate) enum UrlStatus {
-    #[default]
-    None,
-    Invalid,
-    Loading,
-    Loaded,
-}
 
 pub(crate) struct App {
     config: Config,
@@ -163,12 +52,12 @@ pub(crate) struct App {
 }
 
 impl App {
-    pub fn new() -> (Self, Task<Message>) {
+    fn new() -> (Self, Task<Message>) {
         let config = Config::load().expect("failed to load config");
         (config.into(), Task::none())
     }
 
-    pub fn title(&self) -> String {
+    fn title(&self) -> String {
         let mut title = String::from("Giga Grabber");
 
         // runner is None when not in use
@@ -188,7 +77,7 @@ impl App {
         title
     }
 
-    pub fn update(&mut self, message: Message) -> Task<Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Refresh => Task::none(),
             Message::AddUrlClipboard => clipboard::read().map(Message::GotClipboard),
@@ -255,15 +144,18 @@ impl App {
                     Ok((files, index)) => {
                         if let Some(input) = self.url_input.get_mut(index) {
                             input.status = UrlStatus::Loaded;
-                            
+
                             // Filter out duplicate files based on handles
                             for file in files {
                                 // Collect all handles from this file and its children
-                                let handles: Vec<String> = file.iter().map(|f| f.node.handle.clone()).collect();
-                                
+                                let handles: Vec<String> =
+                                    file.iter().map(|f| f.node.handle.clone()).collect();
+
                                 // Check if any handle already exists
-                                let has_duplicate = handles.iter().any(|handle| self.file_handles.contains(handle));
-                                
+                                let has_duplicate = handles
+                                    .iter()
+                                    .any(|handle| self.file_handles.contains(handle));
+
                                 // Only add if no duplicates found
                                 if !has_duplicate {
                                     // Add all handles to the tracking set
@@ -292,8 +184,9 @@ impl App {
             }
             Message::AddFiles => {
                 // Collect handles from active downloads to prevent duplicates
-                let active_handles: HashSet<String> = self.active_downloads.keys().cloned().collect();
-                
+                let active_handles: HashSet<String> =
+                    self.active_downloads.keys().cloned().collect();
+
                 // flatten file structure into a list of downloads
                 let downloads: Vec<Download> = self
                     .files
@@ -621,7 +514,7 @@ impl App {
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    fn view(&self) -> Element<'_, Message> {
         // build content
         let content = match self.route {
             Route::Home => {
@@ -734,7 +627,7 @@ impl App {
                                 .style(|theme: &Theme| {
                                     let palette = theme.extended_palette();
                                     container::Style {
-                                        background: Some(palette.background.weak.color.into()),
+                                        background: Some(palette.background.strong.color.into()),
                                         border: Border::default().rounded(4.0),
                                         ..Default::default()
                                     }
@@ -786,17 +679,17 @@ impl App {
                             .spacing(10)
                             .push(
                                 button(" Add from clipboard ")
-                                    .style(button::danger)
+                                    .style(button::primary)
                                     .on_press(Message::AddUrlClipboard),
                             )
                             .push(
                                 button(" + ")
-                                    .style(button::danger)
+                                    .style(button::primary)
                                     .on_press(Message::AddInput),
                             )
                             .push(
                                 button(" Load all ")
-                                    .style(button::danger)
+                                    .style(button::primary)
                                     .on_press(Message::AddAllUrls),
                             ),
                     ),
@@ -827,7 +720,7 @@ impl App {
                                 .spacing(10)
                                 .push(
                                     button(" Add to queue ")
-                                        .style(button::danger)
+                                        .style(button::primary)
                                         .on_press(Message::AddFiles),
                                 )
                                 .push(
@@ -850,7 +743,9 @@ impl App {
                                     .style(|theme: &Theme| {
                                         let palette = theme.extended_palette();
                                         container::Style {
-                                            background: Some(palette.background.weak.color.into()),
+                                            background: Some(
+                                                palette.background.strong.color.into(),
+                                            ),
                                             border: Border::default().rounded(4.0),
                                             ..Default::default()
                                         }
@@ -861,7 +756,7 @@ impl App {
                 )
             }
             Route::Settings => {
-                let mut apply_button = button(" Apply ").style(button::danger);
+                let mut apply_button = button(" Apply ").style(button::primary);
 
                 if self.rebuild_available {
                     apply_button = apply_button.on_press(Message::RebuildMega);
@@ -937,7 +832,7 @@ impl App {
                                 .push(space::horizontal().width(Length::Fixed(8_f32)))
                                 .push(
                                     button(" Save ")
-                                        .style(button::danger)
+                                        .style(button::primary)
                                         .on_press(Message::SaveConfig),
                                 )
                                 .push(space::horizontal().width(Length::Fixed(10_f32)))
@@ -978,7 +873,7 @@ impl App {
                     .style(|theme: &Theme| {
                         let palette = theme.extended_palette();
                         container::Style {
-                            background: Some(palette.background.weak.color.into()),
+                            background: Some(palette.background.strong.color.into()),
                             ..Default::default()
                         }
                     }),
@@ -1012,7 +907,7 @@ impl App {
                                             .push(space::horizontal().width(Length::FillPortion(3)))
                                             .push(
                                                 button(" Ok ")
-                                                    .style(button::danger)
+                                                    .style(button::primary)
                                                     .on_press(Message::CloseModal),
                                             ),
                                     ),
@@ -1042,13 +937,13 @@ impl App {
     }
 
     // determines the correct Theme based on configuration & system settings
-    pub fn theme(&self) -> Option<Theme> {
+    fn theme(&self) -> Option<Theme> {
         // Return None for system theme (Iced 0.14 handles this automatically)
         // For explicit theme selection, return Some(theme)
         Some(self.config.get_theme())
     }
 
-    pub fn subscription(&self) -> Subscription<Message> {
+    fn subscription(&self) -> Subscription<Message> {
         // reads runner messages from channel and sends them to the UI
         let runner_subscription = Subscription::run(runner_worker);
 
@@ -1059,70 +954,7 @@ impl App {
         // run all subscriptions in parallel
         Subscription::batch(vec![runner_subscription, refresh])
     }
-}
 
-impl From<Config> for App {
-    /// initializes the app from the config
-    fn from(config: Config) -> Self {
-        // build the mega client
-        let mega = mega_builder(&config).unwrap();
-        let (download_sender, download_receiver) = kanal::unbounded();
-
-        Self {
-            config,
-            mega,
-            worker: None,
-            active_downloads: HashMap::new(),
-            runner_sender: None,
-            download_sender,
-            download_receiver: download_receiver.to_async(),
-            files: Vec::new(),
-            file_filter: HashMap::new(),
-            file_handles: HashSet::new(),
-            url_input: IndexMap::default(),
-            expanded_files: HashMap::new(),
-            route: Route::Home,
-            url_regex: Regex::new("https?://mega\\.nz/(folder|file)/([\\dA-Za-z]+)#([\\dA-Za-z-_]+)").unwrap(),
-            proxy_regex: Regex::new("(?:(?:https?|socks5h?)://)(?:(?:[a-zA-Z\\d]+(?::[a-zA-Z\\d]+)?@)?)(?:(?:[a-z\\d](?:[a-z\\d\\-]{0,61}[a-z\\d])?\\.)+[a-z\\d][a-z\\d\\-]{0,61}[a-z\\d]|(?:\\d{1,3}\\.){3}\\d{1,3})(:\\d{1,5})").unwrap(),
-            errors: Vec::new(),
-            error_modal: None,
-            all_paused: false,
-            bandwidth_counter: 0,
-            rebuild_available: false,
-        }
-    }
-}
-
-fn runner_worker() -> impl Stream<Item = Message> {
-    stream::channel(100, async |mut output| {
-        // Create tokio channel for workers
-        let (sender, mut receiver) = tokio_channel::<RunnerMessage>(64);
-
-        // Send the sender back to the application
-        if output.send(Message::RunnerReady(sender)).await.is_err() {
-            return;
-        }
-
-        loop {
-            // Read next message from workers
-            let msg = if let Some(msg) = receiver.recv().await {
-                msg
-            } else {
-                RunnerMessage::Finished
-            };
-
-            // Forward message to UI
-            let is_finished = matches!(msg, RunnerMessage::Finished)
-                | output.send(Message::Runner(msg)).await.is_err();
-
-            if is_finished {
-                break;
-            }
-        }
-    })
-}
-
-impl App {
     fn recursive_files<'a>(&self, file: &'a MegaFile) -> Element<'a, Message> {
         if file.children.is_empty() {
             Row::new()
@@ -1154,7 +986,7 @@ impl App {
                             .height(Length::Fixed(16_f32))
                             .width(Length::Fixed(16_f32)),
                         )
-                        .style(|theme, status| styles::button::IconButton.style(theme, status))
+                        .style(button::background)
                         .on_press(Message::ToggleExpanded(file.node.handle.clone()))
                         .padding(3),
                     )
@@ -1193,9 +1025,9 @@ impl App {
     ) -> Element<'a, Message> {
         let palette = theme.extended_palette();
         let style = if disabled {
-            styles::svg::SvgIcon::new(palette.danger.base.color.into())
+            SvgIcon::new(palette.secondary.weak.color.into())
         } else {
-            styles::svg::SvgIcon::new(palette.danger.strong.color.into())
+            SvgIcon::new(palette.primary.strong.color.into())
         };
 
         let mut row = Row::new()
@@ -1295,7 +1127,7 @@ impl App {
                                 .width(Length::Fixed(22_f32))
                                 .height(Length::Fixed(22_f32)),
                         )
-                        .style(|theme, status| styles::button::IconButton.style(theme, status))
+                        .style(button::background)
                         .on_press(Message::RemoveInput(*index))
                         .padding(4),
                     );
@@ -1393,9 +1225,7 @@ impl App {
                                         .width(Length::Fixed(15_f32))
                                         .height(Length::Fixed(15_f32)),
                                 )
-                                .style(|theme, status| {
-                                    styles::button::IconButton.style(theme, status)
-                                })
+                                .style(button::background)
                                 .on_press(Message::RemoveProxy(index))
                                 .padding(4),
                             )
@@ -1496,66 +1326,40 @@ impl App {
     }
 }
 
-/// a wrapper around HashMap that uses an incrementing index as the key
-struct IndexMap<T> {
-    data: HashMap<usize, T>,
-    unused_indices: Vec<usize>,
-    next_index: usize,
-}
+impl From<Config> for App {
+    /// initializes the app from the config
+    fn from(config: Config) -> Self {
+        // build the mega client
+        let mega = mega_builder(&config).unwrap();
+        let (download_sender, download_receiver) = kanal::unbounded();
 
-impl<T: Default> Default for IndexMap<T> {
-    fn default() -> Self {
         Self {
-            data: HashMap::from([(0, T::default())]),
-            unused_indices: Vec::new(),
-            next_index: 1,
+            config,
+            mega,
+            worker: None,
+            active_downloads: HashMap::new(),
+            runner_sender: None,
+            download_sender,
+            download_receiver: download_receiver.to_async(),
+            files: Vec::new(),
+            file_filter: HashMap::new(),
+            file_handles: HashSet::new(),
+            url_input: IndexMap::default(),
+            expanded_files: HashMap::new(),
+            route: Route::Home,
+            url_regex: Regex::new("https?://mega\\.nz/(folder|file)/([\\dA-Za-z]+)#([\\dA-Za-z-_]+)").unwrap(),
+            proxy_regex: Regex::new("(?:(?:https?|socks5h?)://)(?:(?:[a-zA-Z\\d]+(?::[a-zA-Z\\d]+)?@)?)(?:(?:[a-z\\d](?:[a-z\\d\\-]{0,61}[a-z\\d])?\\.)+[a-z\\d][a-z\\d\\-]{0,61}[a-z\\d]|(?:\\d{1,3}\\.){3}\\d{1,3})(:\\d{1,5})").unwrap(),
+            errors: Vec::new(),
+            error_modal: None,
+            all_paused: false,
+            bandwidth_counter: 0,
+            rebuild_available: false,
         }
     }
 }
 
-impl<T> IndexMap<T>
-where
-    T: Default,
-{
-    fn insert(&mut self, value: T) -> usize {
-        let index = if let Some(unused_index) = self.unused_indices.pop() {
-            unused_index
-        } else {
-            let index = self.next_index;
-            self.next_index += 1;
-            index
-        };
-
-        self.data.insert(index, value);
-        index
-    }
-
-    fn update(&mut self, index: usize, value: T) -> Option<T> {
-        self.data.insert(index, value)
-    }
-
-    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        self.data.get_mut(&index)
-    }
-
-    fn remove(&mut self, index: usize) -> Option<T> {
-        let value = self.data.remove(&index);
-
-        if value.is_some() {
-            self.unused_indices.push(index);
-        }
-
-        value
-    }
-}
-
-struct WorkerState {
-    handles: Vec<WorkerHandle>,
-    cancel: CancellationToken,
-}
-
-/// returns the settings for Iced, with the config inside
-pub(crate) fn settings() -> iced::Application<impl iced::Program<Message = Message, Theme = Theme>>
+/// builds the iced app
+pub(crate) fn build_app() -> iced::Application<impl iced::Program<Message = Message, Theme = Theme>>
 {
     iced::application(App::new, App::update, App::view)
         .title(App::title)
@@ -1568,80 +1372,4 @@ pub(crate) fn settings() -> iced::Application<impl iced::Program<Message = Messa
             family: iced::font::Family::Name("Cabin"),
             ..Font::DEFAULT
         })
-}
-
-// build a new mega client from config
-pub(crate) fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
-    if config.proxy_mode != ProxyMode::None && config.proxies.is_empty() {
-        Err(anyhow::Error::msg("no proxies"))
-    } else {
-        // build http client
-        let http_client = Client::builder()
-            .proxy(Proxy::custom({
-                let proxies = config.proxies.clone();
-                let proxy_mode = config.proxy_mode;
-
-                move |_| match proxy_mode {
-                    ProxyMode::Random => {
-                        let i = fastrand::usize(..proxies.len());
-                        let proxy_url = &proxies[i];
-                        Url::parse(proxy_url).unwrap().into()
-                    }
-                    ProxyMode::Single => {
-                        let proxy_url = &proxies[0];
-                        Url::parse(proxy_url).unwrap().into()
-                    }
-                    ProxyMode::None => None::<Url>,
-                }
-            }))
-            .connect_timeout(config.timeout)
-            .read_timeout(config.timeout)
-            .tcp_keepalive(None)
-            .build()?;
-
-        MegaClient::new(http_client)
-    }
-}
-
-// build an icon button
-fn icon_button(icon: &'static [u8], message: Message) -> Element<'static, Message> {
-    button(
-        svg(svg::Handle::from_memory(icon))
-            .height(Length::Fixed(25_f32))
-            .width(Length::Fixed(25_f32)),
-    )
-    .padding(4)
-    .style(|theme, status| styles::button::IconButton.style(theme, status))
-    .on_press(message)
-    .into()
-}
-
-// pads a usize with spaces
-fn pad_usize(num: usize) -> String {
-    let mut s = num.to_string();
-
-    while s.len() < 3 {
-        s.push(' ');
-    }
-
-    s
-}
-
-// rounds f32 & pads with spaces
-fn pad_f32(num: f32) -> String {
-    let mut s = if num < 0.0001 {
-        String::from("0")
-    } else if num < 10.0 {
-        format!("{:.2}", num)
-    } else if num < 100.0 {
-        format!("{:.1}", num)
-    } else {
-        format!("{:.0}", num)
-    };
-
-    while s.len() <= 3 {
-        s.insert(0, ' ');
-    }
-
-    s
 }
