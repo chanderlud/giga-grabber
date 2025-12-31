@@ -1,6 +1,6 @@
+use crate::helpers::UrlStatus;
 use iced::widget::text_input::{Status, Style};
 use iced::{Border, Theme, border};
-use crate::helpers::UrlStatus;
 
 pub(crate) struct UrlInput {
     pub(crate) mode: UrlStatus,

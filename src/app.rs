@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::helpers::*;
-use crate::resources::*;
 use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::{MegaClient, NodeKind};
+use crate::resources::*;
 use crate::styles::svg::SvgIcon;
 use crate::{Download, MegaFile, ProxyMode, RunnerMessage, get_files, spawn_workers, styles};
 use futures::future::join_all;

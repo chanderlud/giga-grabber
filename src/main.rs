@@ -25,8 +25,8 @@ mod config;
 mod helpers;
 mod loading_wheel;
 mod mega_client;
-mod styles;
 mod resources;
+mod styles;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
 

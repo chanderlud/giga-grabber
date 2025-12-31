@@ -4,10 +4,10 @@ use crate::{MegaFile, ProxyMode, RunnerMessage, WorkerHandle};
 use iced::futures::Stream;
 use iced::futures::sink::SinkExt;
 use iced::widget::{button, svg};
-use iced::{Element, Length, stream, Theme};
+use iced::{Element, Length, Theme, stream};
 use reqwest::{Client, Proxy};
 use std::collections::HashMap;
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{Sender, channel};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
