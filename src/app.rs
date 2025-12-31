@@ -22,7 +22,7 @@ use num_traits::cast::ToPrimitive;
 use regex::Regex;
 use reqwest::{Client, Proxy, Url};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -149,6 +149,7 @@ pub(crate) struct App {
     download_receiver: kanal::AsyncReceiver<Download>,
     files: Vec<MegaFile>,
     file_filter: HashMap<String, bool>,
+    file_handles: HashSet<String>,
     url_input: IndexMap<UrlInput>,
     expanded_files: HashMap<String, bool>,
     route: Route,
@@ -254,7 +255,25 @@ impl App {
                     Ok((files, index)) => {
                         if let Some(input) = self.url_input.get_mut(index) {
                             input.status = UrlStatus::Loaded;
-                            self.files.extend(files);
+                            
+                            // Filter out duplicate files based on handles
+                            for file in files {
+                                // Collect all handles from this file and its children
+                                let handles: Vec<String> = file.iter().map(|f| f.node.handle.clone()).collect();
+                                
+                                // Check if any handle already exists
+                                let has_duplicate = handles.iter().any(|handle| self.file_handles.contains(handle));
+                                
+                                // Only add if no duplicates found
+                                if !has_duplicate {
+                                    // Add all handles to the tracking set
+                                    for handle in &handles {
+                                        self.file_handles.insert(handle.clone());
+                                    }
+                                    // Add the file to the files list
+                                    self.files.push(file);
+                                }
+                            }
                         } else {
                             self.error_modal = Some("An error occurred".to_string());
                         }
@@ -272,6 +291,9 @@ impl App {
                 Task::none()
             }
             Message::AddFiles => {
+                // Collect handles from active downloads to prevent duplicates
+                let active_handles: HashSet<String> = self.active_downloads.keys().cloned().collect();
+                
                 // flatten file structure into a list of downloads
                 let downloads: Vec<Download> = self
                     .files
@@ -279,6 +301,7 @@ impl App {
                     .flat_map(|file| file.iter())
                     .filter(|f| f.node.kind == NodeKind::File)
                     .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
+                    .filter(|f| !active_handles.contains(&f.node.handle))
                     .map(Download::new)
                     .collect();
 
@@ -581,6 +604,7 @@ impl App {
             Message::ClearFiles => {
                 self.files.clear(); // clear files
                 self.file_filter.clear(); // clear file filter
+                self.file_handles.clear(); // clear file handles tracking
 
                 // clear loaded URL inputs
                 self.url_input
@@ -1054,6 +1078,7 @@ impl From<Config> for App {
             download_receiver: download_receiver.to_async(),
             files: Vec::new(),
             file_filter: HashMap::new(),
+            file_handles: HashSet::new(),
             url_input: IndexMap::default(),
             expanded_files: HashMap::new(),
             route: Route::Home,
