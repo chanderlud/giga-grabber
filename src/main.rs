@@ -333,6 +333,10 @@ async fn worker(
         select! {
             _ = cancellation_token.cancelled() => break,
             Ok(download) = receiver.recv() => {
+                if download.stop.is_cancelled() {
+                    continue;
+                }
+                
                 let since_last_retry = download.last_tried_at.lock().await.as_ref().map(|i| i.elapsed());
                 if let Some(elapsed) = since_last_retry {
                     let retries = download.retries.load(Ordering::Relaxed);
@@ -387,6 +391,9 @@ async fn worker(
                     select! {
                         _ = cancellation_token.cancelled() => {
                             break;
+                        }
+                        _ = download.stop.cancelled() => {
+                            continue;
                         }
                         res = sem.acquire_many_owned(weight as u32) => {
                             res?
