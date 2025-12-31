@@ -1,5 +1,5 @@
-use crate::circular::Circular;
 use crate::config::Config;
+use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::{MegaClient, NodeKind};
 use crate::{
     Download, MegaFile, ProxyMode, RunnerMessage, WorkerHandle, get_files, spawn_workers, styles,
@@ -8,6 +8,7 @@ use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
 use iced::futures::Stream;
 use iced::futures::sink::SinkExt;
+use iced::stream;
 use iced::time::every;
 use iced::widget::{Column, Row, slider, space, svg};
 use iced::widget::{
@@ -15,7 +16,6 @@ use iced::widget::{
     stack, text, text_input,
 };
 use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme, clipboard};
-use iced::{stream};
 use log::error;
 use native_dialog::FileDialog;
 use num_traits::cast::ToPrimitive;
@@ -1276,7 +1276,7 @@ impl App {
                     );
                 }
                 UrlStatus::Loading => {
-                    row = row.push(Circular::new().size(30.0).bar_height(3.0));
+                    row = row.push(LoadingWheelWidget::new().size(30.0));
                 }
                 UrlStatus::Loaded => {
                     row = row.push(

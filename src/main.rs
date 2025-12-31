@@ -20,10 +20,9 @@ use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
 mod app;
-mod circular;
 mod cli;
 mod config;
-mod easing;
+mod loading_wheel;
 mod mega_client;
 mod styles;
 
