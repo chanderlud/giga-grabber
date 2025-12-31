@@ -25,8 +25,15 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
+use iced::font::{Family, Weight};
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
+
+const MONOSPACE: Font = Font {
+    family: Family::Name("Inconsolata"),
+    weight: Weight::Medium,
+    ..Font::DEFAULT
+};
 
 pub(crate) struct App {
     config: Config,
@@ -562,10 +569,7 @@ impl App {
                                     .width(Length::Shrink)
                                     .height(Length::Fill)
                                     .align_y(Vertical::Center)
-                                    .font(Font {
-                                        family: iced::font::Family::Name("Inconsolata"),
-                                        ..Font::DEFAULT
-                                    })
+                                    .font(MONOSPACE)
                                     .size(16),
                                 )
                                 .push(space::horizontal().width(Length::Fixed(5_f32)))
@@ -617,10 +621,7 @@ impl App {
                             .push(
                                 container(
                                     text(format!(" {bandwidth_gb:.2} GB used ").replace('0', "O"))
-                                        .font(Font {
-                                            family: iced::font::Family::Name("Inconsolata"),
-                                            ..Font::DEFAULT
-                                        })
+                                        .font(MONOSPACE)
                                         .align_y(Vertical::Center)
                                         .height(Length::Fill),
                                 )
@@ -731,10 +732,7 @@ impl App {
                                 .push(
                                     container(
                                         text(format!(" {:.2} GB ", size_gb).replace('0', "O"))
-                                            .font(Font {
-                                                family: iced::font::Family::Name("Inconsolata"),
-                                                ..Font::DEFAULT
-                                            })
+                                            .font(MONOSPACE)
                                             .align_y(Vertical::Center)
                                             .align_x(Horizontal::Center)
                                             .width(Length::Fill)
@@ -1167,12 +1165,10 @@ impl App {
             .push(space::horizontal())
             .push(
                 text(pad_usize(value).replace('0', "O"))
-                    .font(Font {
-                        family: iced::font::Family::Name("Inconsolata"),
-                        ..Font::DEFAULT
-                    })
+                    .font(MONOSPACE)
                     .align_y(Vertical::Center)
-                    .height(Length::Fill),
+                    .height(Length::Fill)
+                    .size(20),
             )
             .push(space::horizontal().width(Length::Fixed(10_f32)))
             .push(
@@ -1368,8 +1364,5 @@ pub(crate) fn build_app() -> iced::Application<impl iced::Program<Message = Mess
         .window_size((700.0, 550.0))
         .font(CABIN_REGULAR)
         .font(INCONSOLATA_MEDIUM)
-        .default_font(Font {
-            family: iced::font::Family::Name("Cabin"),
-            ..Font::DEFAULT
-        })
+        .default_font(Font::with_name("Cabin"))
 }
