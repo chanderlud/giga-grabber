@@ -6,6 +6,7 @@ use crate::resources::*;
 use crate::{Download, MegaFile, ProxyMode, RunnerMessage, get_files, spawn_workers, styles};
 use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
+use iced::font::{Family, Weight};
 use iced::time::every;
 use iced::widget::{Column, Row, slider, space, svg};
 use iced::widget::{
@@ -24,7 +25,6 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use iced::font::{Family, Weight};
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
 
@@ -526,6 +526,9 @@ impl App {
         // build content
         let content = match self.route {
             Route::Home => {
+                let theme = self.config.get_theme();
+                let palette = theme.extended_palette();
+                let icon_color = Some(palette.primary.base.color);
                 let mut download_list = Column::new();
 
                 for (index, (id, download)) in self.active_downloads.iter().enumerate() {
@@ -535,12 +538,22 @@ impl App {
                         progress = 0.1;
                     }
 
+                    let icon_style_pause = styles::svg::svg_icon_style(icon_color);
                     let pause_button = if download.is_paused() {
-                        icon_button(PLAY_ICON, Message::ResumeDownload(id.clone()))
+                        icon_button(
+                            PLAY_ICON,
+                            Message::ResumeDownload(id.clone()),
+                            icon_style_pause,
+                        )
                     } else {
-                        icon_button(PAUSE_ICON, Message::PauseDownload(id.clone()))
+                        icon_button(
+                            PAUSE_ICON,
+                            Message::PauseDownload(id.clone()),
+                            icon_style_pause,
+                        )
                     };
 
+                    let icon_style_x = styles::svg::svg_icon_style(icon_color);
                     download_list = download_list.push(
                         container(
                             Row::new()
@@ -574,7 +587,11 @@ impl App {
                                     .size(16),
                                 )
                                 .push(space::horizontal().width(Length::Fixed(5_f32)))
-                                .push(icon_button(X_ICON, Message::CancelDownload(id.clone())))
+                                .push(icon_button(
+                                    X_ICON,
+                                    Message::CancelDownload(id.clone()),
+                                    icon_style_x,
+                                ))
                                 .push(pause_button)
                                 .push(space::horizontal().width(Length::Fixed(7_f32))),
                         )
@@ -971,6 +988,10 @@ impl App {
                 .into()
         } else {
             let expanded = *self.expanded_files.get(&file.node.handle).unwrap_or(&false);
+            let theme = self.config.get_theme();
+            let palette = theme.extended_palette();
+            let color = Some(palette.primary.base.color);
+            let style = styles::svg::svg_icon_style(color);
 
             let mut column = Column::new().spacing(5).push(
                 Row::new()
@@ -983,7 +1004,8 @@ impl App {
                                 EXPAND_ICON
                             }))
                             .height(Length::Fixed(16_f32))
-                            .width(Length::Fixed(16_f32)),
+                            .width(Length::Fixed(16_f32))
+                            .style(style),
                         )
                         .style(button::background)
                         .on_press(Message::ToggleExpanded(file.node.handle.clone()))
@@ -1024,9 +1046,9 @@ impl App {
     ) -> Element<'a, Message> {
         let palette = theme.extended_palette();
         let color = if disabled {
-            Some(palette.secondary.weak.color.into())
+            Some(palette.secondary.weak.color)
         } else {
-            Some(palette.primary.strong.color.into())
+            Some(palette.primary.strong.color)
         };
 
         let mut row = Row::new()
@@ -1038,7 +1060,7 @@ impl App {
             row = row
                 .push(
                     svg(svg::Handle::from_memory(SELECTED_ICON))
-                        .style(move |theme, status| style(theme, status))
+                        .style(style)
                         .width(Length::Fixed(4_f32))
                         .height(Length::Fixed(25_f32)),
                 )
@@ -1061,7 +1083,7 @@ impl App {
                     svg(handle)
                         .width(Length::Fixed(28_f32))
                         .height(Length::Fixed(28_f32))
-                        .style(move |theme, status| svg_style(theme, status)),
+                        .style(svg_style),
                 )
                 .padding(4)
                 .style({
@@ -1132,11 +1154,16 @@ impl App {
                     row = row.push(LoadingWheelWidget::new().size(30.0));
                 }
                 UrlStatus::Loaded => {
+                    let theme = self.config.get_theme();
+                    let palette = theme.extended_palette();
+                    let color = Some(palette.success.strong.color);
+                    let style = styles::svg::svg_icon_style(color);
                     row = row.push(
                         container(
                             svg(svg::Handle::from_memory(CHECK_ICON))
                                 .width(Length::Fixed(26_f32))
-                                .height(Length::Fixed(26_f32)),
+                                .height(Length::Fixed(26_f32))
+                                .style(style),
                         )
                         .padding(2),
                     );

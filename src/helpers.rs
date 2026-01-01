@@ -3,6 +3,7 @@ use crate::mega_client::MegaClient;
 use crate::{MegaFile, ProxyMode, RunnerMessage, WorkerHandle};
 use iced::futures::Stream;
 use iced::futures::sink::SinkExt;
+use iced::widget::svg::{Status, Style};
 use iced::widget::{button, svg};
 use iced::{Element, Length, Theme, stream};
 use reqwest::{Client, Proxy};
@@ -223,11 +224,16 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
 }
 
 /// build an icon button
-pub(crate) fn icon_button(icon: &'static [u8], message: Message) -> Element<'static, Message> {
+pub(crate) fn icon_button(
+    icon: &'static [u8],
+    message: Message,
+    style: impl Fn(&Theme, Status) -> Style + 'static,
+) -> Element<'static, Message> {
     button(
         svg(svg::Handle::from_memory(icon))
             .height(Length::Fixed(25_f32))
-            .width(Length::Fixed(25_f32)),
+            .width(Length::Fixed(25_f32))
+            .style(style),
     )
     .padding(4)
     .style(button::background)

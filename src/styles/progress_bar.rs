@@ -10,4 +10,3 @@ pub(crate) fn custom_style(theme: &Theme) -> progress_bar::Style {
         border: Border::default(),
     }
 }
-

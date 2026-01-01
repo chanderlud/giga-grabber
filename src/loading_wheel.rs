@@ -7,7 +7,7 @@ use iced::mouse;
 use iced::time::Instant;
 use iced::widget::canvas;
 use iced::window;
-use iced::{Color, Element, Event, Length, Rectangle, Renderer, Size, Vector};
+use iced::{Element, Event, Length, Rectangle, Renderer, Size, Vector};
 
 use std::f32::consts::PI;
 
