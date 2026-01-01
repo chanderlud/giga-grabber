@@ -3,39 +3,35 @@ use crate::helpers::*;
 use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::{MegaClient, NodeKind};
 use crate::resources::*;
-use crate::{Download, MegaFile, ProxyMode, RunnerMessage, get_files, spawn_workers, styles};
+use crate::screens::*;
+use crate::{Download, MegaFile, RunnerMessage, get_files, spawn_workers, styles};
 use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::time::every;
-use iced::widget::{Column, Row, slider, space, svg};
+use iced::widget::{Column, Row, space, svg};
 use iced::widget::{
-    button, center, checkbox, container, mouse_area, opaque, pick_list, progress_bar, scrollable,
-    stack, text, text_input,
+    button, center, checkbox, container, mouse_area, opaque, progress_bar, scrollable, stack, text,
+    text_input,
 };
 use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme, clipboard};
 use log::error;
-use native_dialog::FileDialog;
-use num_traits::cast::ToPrimitive;
 use regex::Regex;
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
-use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
 
-const MONOSPACE: Font = Font {
+pub(crate) const MONOSPACE: Font = Font {
     family: Family::Name("Inconsolata"),
     weight: Weight::Medium,
     ..Font::DEFAULT
 };
 
 pub(crate) struct App {
-    config: Config,
+    settings: Settings,
     mega: MegaClient,
     worker: Option<WorkerState>,
     active_downloads: HashMap<String, Download>,
@@ -49,12 +45,10 @@ pub(crate) struct App {
     expanded_files: HashMap<String, bool>,
     route: Route,
     url_regex: Regex,
-    proxy_regex: Regex,
     errors: Vec<String>,
     error_modal: Option<String>,
     all_paused: bool,
     bandwidth_counter: usize,
-    rebuild_available: bool,
 }
 
 impl App {
@@ -210,7 +204,7 @@ impl App {
                 }
 
                 if self.worker.is_none() {
-                    self.worker = Some(self.start_workers(self.config.max_workers));
+                    self.worker = Some(self.start_workers(self.settings.config.max_workers));
                 }
 
                 self.route = Route::Home; // navigate to home
@@ -364,143 +358,43 @@ impl App {
                 }
                 Task::none()
             }
-            Message::RebuildMega => {
-                // if the worker is active, do not rebuild
-                if self.worker.is_some() {
-                    self.error_modal = Some(
-                        "Cannot apply these configuration changes while downloads are active"
-                            .to_string(),
-                    );
-                    return Task::none();
-                }
+            Message::Settings(msg) => {
+                use crate::screens::settings::Action;
+                match self.settings.update(msg) {
+                    Action::None => Task::none(),
+                    Action::ConfigSaved => Task::none(),
+                    Action::RebuildRequired(config) => {
+                        // if the worker is active, do not rebuild
+                        if self.worker.is_some() {
+                            self.error_modal = Some(
+                                "Cannot apply these configuration changes while downloads are active"
+                                    .to_string(),
+                            );
+                            return Task::none();
+                        }
 
-                // build a new mega client
-                match mega_builder(&self.config) {
-                    Ok(mega) => {
-                        self.mega = mega; // set the new mega client
-                        self.rebuild_available = false; // rebuild is no longer available
-                        Task::perform(async {}, |_| Message::SaveConfig) // save the config
+                        // build a new mega client
+                        match mega_builder(&config) {
+                            Ok(mega) => {
+                                self.mega = mega; // set the new mega client
+                                self.settings = Settings::new(config.clone());
+                                self.settings.set_rebuild_available(false);
+                                Task::perform(async {}, |_| {
+                                    Message::Settings(SettingsMessage::SaveConfig)
+                                }) // save the config
+                            }
+                            Err(error) => {
+                                self.error_modal =
+                                    Some(format!("Failed to build mega client: {}", error));
+                                Task::none()
+                            }
+                        }
                     }
-                    Err(error) => {
-                        self.error_modal = Some(format!("Failed to build mega client: {}", error));
+                    Action::ShowError(error) => {
+                        self.error_modal = Some(error);
                         Task::none()
                     }
                 }
-            }
-            Message::SettingsSlider((index, value)) => {
-                // update the config
-                match index {
-                    0 => {
-                        if let Some(value) = value.to_usize() {
-                            self.config.max_workers = value;
-                        }
-                    }
-                    1 => {
-                        if let Some(value) = value.to_usize() {
-                            self.config.concurrency_budget = value;
-                        }
-                    }
-                    2 => {
-                        if let Some(value) = value.to_u64() {
-                            self.config.timeout = Duration::from_millis(value);
-                        }
-                    }
-                    3 => {
-                        if let Some(value) = value.to_u32() {
-                            self.config.max_retries = value;
-                        }
-                    }
-                    4 => {
-                        if let Some(value) = value.to_u64() {
-                            self.config.min_retry_delay = Duration::from_millis(value);
-                        }
-                    }
-                    5 => {
-                        if let Some(value) = value.to_u64() {
-                            self.config.max_retry_delay = Duration::from_millis(value);
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-
-                self.rebuild_available = true; // there are changes that can be applied now
-                Task::none()
-            }
-            Message::SaveConfig => {
-                for proxy in &self.config.proxies {
-                    if !self.proxy_regex.is_match(proxy) {
-                        self.error_modal = Some(format!("Invalid proxy url: {}", proxy));
-                        return Task::none();
-                    }
-                }
-
-                // save the config
-                if let Err(error) = self.config.save() {
-                    self.error_modal = Some(format!("Failed to save configuration: {}", error));
-                }
-
-                Task::none()
-            }
-            Message::ResetConfig => {
-                self.config = Config::default();
-                self.rebuild_available = true;
-                Task::none()
-            }
-            Message::ThemeChanged(theme) => {
-                self.config.set_theme(theme);
-                Task::none()
-            }
-            Message::ProxyModeChanged(proxy_mode) => {
-                if proxy_mode == ProxyMode::Single {
-                    // if we're switching to single proxy mode, truncate the proxy list to 1
-                    self.config.proxies.truncate(1);
-                } else if proxy_mode == ProxyMode::None {
-                    self.config.proxies.clear();
-                }
-                self.config.proxy_mode = proxy_mode; // update the config
-                self.rebuild_available = true; // there are changes that can be applied now
-                Task::none()
-            }
-            Message::ProxyUrlChanged(value) => {
-                if let Some(proxy_url) = self.config.proxies.get_mut(0) {
-                    // update the proxy url
-                    *proxy_url = value;
-                } else {
-                    // if there is no proxy url, add value to the proxy list
-                    self.config.proxies.push(value);
-                }
-                self.rebuild_available = true; // there are changes that can be applied now
-                Task::none()
-            }
-            Message::AddProxies => {
-                if let Ok(Some(file_path)) = FileDialog::new()
-                    .add_filter("Text File", &["txt"])
-                    .show_open_single_file()
-                {
-                    match std::fs::File::open(file_path) {
-                        Ok(mut file) => {
-                            let mut contents = String::new();
-                            file.read_to_string(&mut contents).unwrap();
-
-                            for proxy in contents.lines() {
-                                if self.proxy_regex.is_match(proxy) {
-                                    self.config.proxies.push(proxy.to_string());
-                                    self.rebuild_available = true;
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            self.error_modal = Some(format!("Failed to open file: {}", error));
-                        }
-                    };
-                }
-
-                Task::none()
-            }
-            Message::RemoveProxy(index) => {
-                self.config.proxies.remove(index); // remove the proxy
-                self.rebuild_available = true; // there are changes that can be applied now
-                Task::none()
             }
             Message::ClearFiles => {
                 self.files.clear(); // clear files
@@ -526,7 +420,7 @@ impl App {
         // build content
         let content = match self.route {
             Route::Home => {
-                let theme = self.config.get_theme();
+                let theme = self.settings.config.get_theme();
                 let palette = theme.extended_palette();
                 let icon_color = Some(palette.primary.base.color);
                 let mut download_list = Column::new();
@@ -771,101 +665,11 @@ impl App {
                         ),
                 )
             }
-            Route::Settings => {
-                let mut apply_button = button(" Apply ").style(button::primary);
-
-                if self.rebuild_available {
-                    apply_button = apply_button.on_press(Message::RebuildMega);
-                }
-
-                container(
-                    Column::new()
-                        .width(Length::Fixed(350_f32))
-                        .push(self.settings_slider(
-                            0,
-                            self.config.max_workers,
-                            1_f64..=10_f64,
-                            "Max Workers:",
-                        ))
-                        .push(self.settings_slider(
-                            1,
-                            self.config.concurrency_budget,
-                            1_f64..=100_f64,
-                            "Concurrency Budget:",
-                        ))
-                        .push(self.settings_slider(
-                            2,
-                            self.config.timeout.as_millis() as usize,
-                            100_f64..=60000_f64,
-                            "Timeout:",
-                        ))
-                        .push(self.settings_slider(
-                            3,
-                            self.config.max_retries as usize,
-                            1_f64..=10_f64,
-                            "Max retries:",
-                        ))
-                        .push(self.settings_slider(
-                            4,
-                            self.config.min_retry_delay.as_millis() as usize,
-                            100_f64..=self.config.max_retry_delay.as_millis() as f64,
-                            "Min Retry delay:",
-                        ))
-                        .push(self.settings_slider(
-                            5,
-                            self.config.max_retry_delay.as_millis() as usize,
-                            self.config.min_retry_delay.as_millis() as f64..=60000_f64,
-                            "Max Retry delay:",
-                        ))
-                        .push(space::vertical().height(Length::Fixed(10_f32)))
-                        .push(
-                            Row::new()
-                                .height(Length::Fixed(30_f32))
-                                .push(space::horizontal().width(Length::Fixed(8_f32)))
-                                .push(text("Theme").align_y(Vertical::Center).height(Length::Fill))
-                                .push(space::horizontal())
-                                .push(
-                                    pick_list(
-                                        Theme::ALL,
-                                        Some(self.config.get_theme()),
-                                        Message::ThemeChanged,
-                                    )
-                                    .width(Length::Fixed(170_f32)),
-                                ),
-                        )
-                        .push(space::vertical().height(Length::Fixed(10_f32)))
-                        .push(self.settings_picklist(
-                            "Proxy Mode",
-                            &ProxyMode::ALL[..],
-                            Some(self.config.proxy_mode),
-                            Message::ProxyModeChanged,
-                        ))
-                        .push(space::vertical().height(Length::Fixed(10_f32)))
-                        .push(self.proxy_selector())
-                        .push(space::vertical().height(Length::Fill))
-                        .push(
-                            Row::new()
-                                .push(space::horizontal().width(Length::Fixed(8_f32)))
-                                .push(
-                                    button(" Save ")
-                                        .style(button::primary)
-                                        .on_press(Message::SaveConfig),
-                                )
-                                .push(space::horizontal().width(Length::Fixed(10_f32)))
-                                .push(apply_button)
-                                .push(space::horizontal().width(Length::Fixed(10_f32)))
-                                .push(
-                                    button(" Reset ")
-                                        .style(button::warning)
-                                        .on_press(Message::ResetConfig),
-                                ),
-                        ),
-                )
-            }
+            Route::Settings => container(self.settings.view().map(Message::Settings)),
         };
 
         // nav + content = body
-        let nav_theme = self.config.get_theme();
+        let nav_theme = self.settings.config.get_theme();
         let body = container(
             Row::new()
                 .push(
@@ -900,7 +704,7 @@ impl App {
         .height(Length::Fill);
 
         if let Some(error_message) = &self.error_modal {
-            let theme = self.config.get_theme();
+            let theme = self.settings.config.get_theme();
             let error_color = theme.extended_palette().danger.strong.color;
             stack![
                 body,
@@ -956,7 +760,7 @@ impl App {
     fn theme(&self) -> Option<Theme> {
         // Return None for system theme (Iced 0.14 handles this automatically)
         // For explicit theme selection, return Some(theme)
-        Some(self.config.get_theme())
+        Some(self.settings.config.get_theme())
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -988,7 +792,7 @@ impl App {
                 .into()
         } else {
             let expanded = *self.expanded_files.get(&file.node.handle).unwrap_or(&false);
-            let theme = self.config.get_theme();
+            let theme = self.settings.config.get_theme();
             let palette = theme.extended_palette();
             let color = Some(palette.primary.base.color);
             let style = styles::svg::svg_icon_style(color);
@@ -1106,7 +910,7 @@ impl App {
     }
 
     fn error_log(&self) -> Element<'_, Message> {
-        let theme = self.config.get_theme();
+        let theme = self.settings.config.get_theme();
         let error_color = theme.extended_palette().danger.strong.color;
         let mut column = Column::new().spacing(2).width(Length::Fill);
 
@@ -1154,7 +958,7 @@ impl App {
                     row = row.push(LoadingWheelWidget::new().size(30.0));
                 }
                 UrlStatus::Loaded => {
-                    let theme = self.config.get_theme();
+                    let theme = self.settings.config.get_theme();
                     let palette = theme.extended_palette();
                     let color = Some(palette.success.strong.color);
                     let style = styles::svg::svg_icon_style(color);
@@ -1176,134 +980,6 @@ impl App {
         inputs.into()
     }
 
-    fn settings_slider<'a>(
-        &self,
-        index: usize,
-        value: usize,
-        range: RangeInclusive<f64>,
-        label: &'a str,
-    ) -> Element<'a, Message> {
-        Row::new()
-            .height(Length::Fixed(30_f32))
-            .push(space::horizontal().width(Length::Fixed(8_f32)))
-            .push(text(label).align_y(Vertical::Center).height(Length::Fill))
-            .push(space::horizontal())
-            .push(
-                text(pad_usize(value).replace('0', "O"))
-                    .font(MONOSPACE)
-                    .align_y(Vertical::Center)
-                    .height(Length::Fill)
-                    .size(20),
-            )
-            .push(space::horizontal().width(Length::Fixed(10_f32)))
-            .push(
-                slider(range, value as f64, move |value| {
-                    Message::SettingsSlider((index, value))
-                })
-                .width(Length::Fixed(130_f32))
-                .height(30)
-                .style(styles::slider::slider_style),
-            )
-            .into()
-    }
-
-    fn settings_picklist<'a, T>(
-        &self,
-        label: &'a str,
-        options: impl Into<Cow<'a, [T]>> + std::borrow::Borrow<[T]> + 'a,
-        selected: Option<T>,
-        message: fn(T) -> Message,
-    ) -> Element<'a, Message>
-    where
-        T: ToString + Eq + 'static + Clone,
-        [T]: ToOwned<Owned = Vec<T>>,
-    {
-        Row::new()
-            .height(Length::Fixed(30_f32))
-            .push(space::horizontal().width(Length::Fixed(8_f32)))
-            .push(text(label).align_y(Vertical::Center).height(Length::Fill))
-            .push(space::horizontal())
-            .push(pick_list(options, selected, message).width(Length::Fixed(170_f32)))
-            .into()
-    }
-
-    fn proxy_selector(&self) -> Element<'_, Message> {
-        let mut column = Column::new();
-
-        if self.config.proxy_mode == ProxyMode::Random {
-            let mut proxy_display = Column::new().width(Length::Fill);
-
-            for (index, proxy) in self.config.proxies.iter().enumerate() {
-                proxy_display = proxy_display.push(
-                    container(
-                        Row::new()
-                            .padding(4)
-                            .push(text(proxy))
-                            .push(space::horizontal())
-                            .push(
-                                button(
-                                    svg(svg::Handle::from_memory(X_ICON))
-                                        .width(Length::Fixed(15_f32))
-                                        .height(Length::Fixed(15_f32)),
-                                )
-                                .style(button::background)
-                                .on_press(Message::RemoveProxy(index))
-                                .padding(4),
-                            )
-                            .push(space::horizontal().width(Length::Fixed(8_f32))),
-                    )
-                    .style(styles::container::download_style(index))
-                    .width(Length::Fill),
-                )
-            }
-
-            if self.config.proxies.is_empty() {
-                proxy_display = proxy_display.push(
-                    text("No proxies")
-                        .width(Length::Fixed(100_f32))
-                        .height(Length::Fixed(35_f32))
-                        .align_y(Vertical::Center)
-                        .align_x(Horizontal::Center),
-                );
-            }
-
-            column = column.push(
-                container(
-                    Column::new()
-                        .push(scrollable(proxy_display).height(Length::Fixed(125_f32)))
-                        .push(space::vertical())
-                        .push(
-                            container(
-                                button(" Add proxies ")
-                                    .on_press(Message::AddProxies)
-                                    .style(button::danger)
-                                    .padding(4),
-                            )
-                            .padding(5),
-                        ),
-                )
-                .style(container::bordered_box)
-                .height(Length::Fixed(170_f32))
-                .padding(2),
-            );
-        } else if self.config.proxy_mode == ProxyMode::Single {
-            column = column.push(
-                text_input(
-                    "Proxy url",
-                    self.config.proxies.first().unwrap_or(&String::new()),
-                )
-                .on_input(Message::ProxyUrlChanged)
-                .style(styles::text_input::url_input_style(UrlStatus::None))
-                .padding(6),
-            );
-        }
-
-        Row::new()
-            .push(space::horizontal().width(Length::Fixed(8_f32)))
-            .push(column)
-            .into()
-    }
-
     fn start_workers(&self, workers: usize) -> WorkerState {
         let cancel = CancellationToken::new();
         let runner_sender = self
@@ -1313,7 +989,7 @@ impl App {
         WorkerState {
             handles: spawn_workers(
                 self.mega.clone(),
-                Arc::new(self.config.clone()),
+                Arc::new(self.settings.config.clone()),
                 self.download_receiver.clone(),
                 self.download_sender.clone_async(),
                 runner_sender,
@@ -1350,7 +1026,7 @@ impl From<Config> for App {
         let (download_sender, download_receiver) = kanal::unbounded();
 
         Self {
-            config,
+            settings: Settings::new(config),
             mega,
             worker: None,
             active_downloads: HashMap::new(),
@@ -1363,13 +1039,12 @@ impl From<Config> for App {
             url_input: IndexMap::default(),
             expanded_files: HashMap::new(),
             route: Route::Home,
-            url_regex: Regex::new(r"https?://mega\.nz/(folder|file)/([\dA-Za-z]+)#([\dA-Za-z-_]+)").unwrap(),
-            proxy_regex: Regex::new(r"(?:https?|socks5h?)://(?:[a-zA-Z\d]+(?::[a-zA-Z\d]+)?@)?(?:(?:[a-z\d](?:[a-z\d\-]{0,61}[a-z\d])?\.)+[a-z\d][a-z\d\-]{0,61}[a-z\d]|(?:\d{1,3}\.){3}\d{1,3})(:\d{1,5})").unwrap(),
+            url_regex: Regex::new(r"https?://mega\.nz/(folder|file)/([\dA-Za-z]+)#([\dA-Za-z-_]+)")
+                .unwrap(),
             errors: Vec::new(),
             error_modal: None,
             all_paused: false,
             bandwidth_counter: 0,
-            rebuild_available: false,
         }
     }
 }

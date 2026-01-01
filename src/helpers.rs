@@ -58,24 +58,8 @@ pub(crate) enum Message {
     ResumeDownloads,
     /// resume download by id
     ResumeDownload(String),
-    /// rebuild mega client with new config
-    RebuildMega,
-    /// when a settings slider is changed, usize is index
-    SettingsSlider((usize, f64)),
-    /// save current config to disk
-    SaveConfig,
-    /// reset config to default
-    ResetConfig,
-    /// theme changed
-    ThemeChanged(Theme),
-    /// proxy mode changed
-    ProxyModeChanged(ProxyMode),
-    /// proxy url changed, single proxy mode
-    ProxyUrlChanged(String),
-    /// add proxies from file
-    AddProxies,
-    /// remove proxy
-    RemoveProxy(usize),
+    /// settings screen message
+    Settings(crate::screens::settings::Message),
     /// remove any loaded files
     ClearFiles,
 }
