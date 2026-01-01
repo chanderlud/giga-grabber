@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::mega_client::MegaClient;
+use crate::screens::{ImportMessage, SettingsMessage};
 use crate::{MegaFile, ProxyMode, RunnerMessage, WorkerHandle};
 use iced::futures::Stream;
 use iced::futures::sink::SinkExt;
@@ -16,16 +17,8 @@ use url::Url;
 pub(crate) enum Message {
     /// force the GUI to update
     Refresh,
-    /// add url from clipboard
-    AddUrlClipboard,
-    /// got clipboard contents
-    GotClipboard(Option<String>),
-    /// url added by user
-    AddUrl(usize),
-    /// add all the urls
-    AddAllUrls,
-    /// backend got files for url
-    GotFiles(Result<(Vec<MegaFile>, usize), usize>),
+    /// import screen message
+    Import(ImportMessage),
     /// user added files to download queue
     AddFiles,
     /// received message from runner
@@ -36,14 +29,8 @@ pub(crate) enum Message {
     Navigate(Route),
     /// toggle file & children for download
     ToggleFile(Box<(bool, MegaFile)>),
-    /// when a character is changed in the url input
-    UrlInput((usize, String)),
     /// toggle expanded state of file tree
     ToggleExpanded(String),
-    /// create a new url input
-    AddInput,
-    /// remove a url input
-    RemoveInput(usize),
     /// close the error modal
     CloseModal,
     /// cancel all downloads
@@ -59,7 +46,7 @@ pub(crate) enum Message {
     /// resume download by id
     ResumeDownload(String),
     /// settings screen message
-    Settings(crate::screens::settings::Message),
+    Settings(SettingsMessage),
     /// remove any loaded files
     ClearFiles,
 }

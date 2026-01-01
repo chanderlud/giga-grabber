@@ -1,10 +1,9 @@
 use crate::config::Config;
 use crate::helpers::*;
-use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::{MegaClient, NodeKind};
 use crate::resources::*;
 use crate::screens::*;
-use crate::{Download, MegaFile, RunnerMessage, get_files, spawn_workers, styles};
+use crate::{Download, MegaFile, RunnerMessage, spawn_workers, styles};
 use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
@@ -12,11 +11,9 @@ use iced::time::every;
 use iced::widget::{Column, Row, space, svg};
 use iced::widget::{
     button, center, checkbox, container, mouse_area, opaque, progress_bar, scrollable, stack, text,
-    text_input,
 };
-use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme, clipboard};
+use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme};
 use log::error;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -32,6 +29,7 @@ pub(crate) const MONOSPACE: Font = Font {
 
 pub(crate) struct App {
     settings: Settings,
+    import: Import,
     mega: MegaClient,
     worker: Option<WorkerState>,
     active_downloads: HashMap<String, Download>,
@@ -41,10 +39,8 @@ pub(crate) struct App {
     files: Vec<MegaFile>,
     file_filter: HashMap<String, bool>,
     file_handles: HashSet<String>,
-    url_input: IndexMap<UrlInput>,
     expanded_files: HashMap<String, bool>,
     route: Route,
-    url_regex: Regex,
     errors: Vec<String>,
     error_modal: Option<String>,
     all_paused: bool,
@@ -80,107 +76,32 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Refresh => Task::none(),
-            Message::AddUrlClipboard => clipboard::read().map(Message::GotClipboard),
-            Message::GotClipboard(contents) => {
-                if let Some(input) = contents {
-                    let stripped = input.trim();
-                    if self.url_regex.is_match(stripped) {
-                        // create new url input with url as value
-                        let index = self.url_input.insert(UrlInput {
-                            value: stripped.to_string(),
-                            status: UrlStatus::None,
-                        });
-
-                        // load the url
-                        Task::perform(async move { index }, Message::AddUrl)
-                    } else {
-                        self.error_modal = Some("Invalid url".to_string());
-                        Task::none()
-                    }
-                } else {
-                    self.error_modal = Some("Clipboard is empty".to_string());
-                    Task::none()
-                }
-            }
-            Message::AddUrl(index) => {
-                // get input from index
-                if let Some(input) = self.url_input.get_mut(index) {
-                    // check if url is valid
-                    if !self.url_regex.is_match(&input.value) {
-                        input.status = UrlStatus::Invalid;
-                        Task::none()
-                    } else {
-                        match input.status {
-                            UrlStatus::Loading | UrlStatus::Loaded => Task::none(), // dont do anything if url is already loading or loaded
-                            _ => {
-                                input.status = UrlStatus::Loading; // set status to loading
-
-                                Task::perform(
-                                    get_files(self.mega.clone(), input.value.clone(), index),
-                                    Message::GotFiles,
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    self.error_modal = Some("An error occurred".to_string());
-                    Task::none()
-                }
-            }
-            Message::AddAllUrls => {
-                let commands: Vec<_> = self
-                    .url_input
-                    .data
-                    .keys()
-                    .cloned()
-                    .map(|index| Task::perform(async move { index }, Message::AddUrl))
-                    .collect();
-
-                Task::batch(commands)
-            }
-            Message::GotFiles(result) => {
-                match result {
-                    // files were loaded successfully
-                    Ok((files, index)) => {
-                        if let Some(input) = self.url_input.get_mut(index) {
-                            input.status = UrlStatus::Loaded;
-
-                            // Filter out duplicate files based on handles
-                            for file in files {
-                                // Collect all handles from this file and its children
-                                let handles: Vec<String> =
-                                    file.iter().map(|f| f.node.handle.clone()).collect();
-
-                                // Check if any handle already exists
-                                let has_duplicate = handles
-                                    .iter()
-                                    .any(|handle| self.file_handles.contains(handle));
-
-                                // Only add if no duplicates found
-                                if !has_duplicate {
-                                    // Add all handles to the tracking set
-                                    for handle in &handles {
-                                        self.file_handles.insert(handle.clone());
-                                    }
-                                    // Add the file to the files list
-                                    self.files.push(file);
+            Message::Import(msg) => {
+                use crate::screens::import::Action;
+                match self.import.update(msg, &self.mega) {
+                    Action::None => Task::none(),
+                    Action::Run(task) => task.map(Message::Import),
+                    Action::FilesLoaded(files) => {
+                        // Filter duplicates using file_handles
+                        for file in files {
+                            let handles: Vec<String> =
+                                file.iter().map(|f| f.node.handle.clone()).collect();
+                            let has_duplicate =
+                                handles.iter().any(|h| self.file_handles.contains(h));
+                            if !has_duplicate {
+                                for handle in &handles {
+                                    self.file_handles.insert(handle.clone());
                                 }
+                                self.files.push(file);
                             }
-                        } else {
-                            self.error_modal = Some("An error occurred".to_string());
                         }
+                        Task::none()
                     }
-                    // an error occurred while loading the files
-                    Err(index) => {
-                        if let Some(input) = self.url_input.get_mut(index) {
-                            input.status = UrlStatus::Invalid;
-                        } else {
-                            self.error_modal = Some("An error occurred".to_string());
-                        }
+                    Action::ShowError(error) => {
+                        self.error_modal = Some(error);
+                        Task::none()
                     }
                 }
-
-                Task::none()
             }
             Message::AddFiles => {
                 // Collect handles from active downloads to prevent duplicates
@@ -268,22 +189,6 @@ impl App {
 
                 Task::none()
             }
-            Message::UrlInput((index, value)) => {
-                if let Some(input) = self.url_input.get_mut(index) {
-                    input.value = value; // update input value
-                } else {
-                    // if the input doesn't exist, create it
-                    self.url_input.update(
-                        index,
-                        UrlInput {
-                            value,
-                            status: UrlStatus::None,
-                        },
-                    );
-                }
-
-                Task::none()
-            }
             Message::ToggleExpanded(hash) => {
                 if let Some(expanded) = self.expanded_files.get_mut(&hash) {
                     // toggle expanded state if it already exists
@@ -293,18 +198,6 @@ impl App {
                     self.expanded_files.insert(hash, true);
                 }
 
-                Task::none()
-            }
-            Message::AddInput => {
-                self.url_input.insert(UrlInput {
-                    value: String::new(),
-                    status: UrlStatus::None,
-                });
-
-                Task::none()
-            }
-            Message::RemoveInput(index) => {
-                self.url_input.remove(index);
                 Task::none()
             }
             Message::CloseModal => {
@@ -402,9 +295,7 @@ impl App {
                 self.file_handles.clear(); // clear file handles tracking
 
                 // clear loaded URL inputs
-                self.url_input
-                    .data
-                    .retain(|_, input| input.status != UrlStatus::Loaded);
+                self.import.clear_loaded_inputs();
 
                 // navigate to import if still on choose files
                 if self.route == Route::ChooseFiles {
@@ -583,30 +474,7 @@ impl App {
                         ),
                 )
             }
-            Route::Import => container(
-                Column::new()
-                    .spacing(5)
-                    .push(scrollable(self.url_inputs()).height(Length::Fill))
-                    .push(
-                        Row::new()
-                            .spacing(10)
-                            .push(
-                                button(" Add from clipboard ")
-                                    .style(button::primary)
-                                    .on_press(Message::AddUrlClipboard),
-                            )
-                            .push(
-                                button(" + ")
-                                    .style(button::primary)
-                                    .on_press(Message::AddInput),
-                            )
-                            .push(
-                                button(" Load all ")
-                                    .style(button::primary)
-                                    .on_press(Message::AddAllUrls),
-                            ),
-                    ),
-            ),
+            Route::Import => container(self.import.view().map(Message::Import)),
             Route::ChooseFiles => {
                 let mut column = Column::new().width(Length::Fill).spacing(5);
 
@@ -921,65 +789,6 @@ impl App {
         column.into()
     }
 
-    fn url_inputs(&self) -> Element<'_, Message> {
-        let mut inputs = Column::new().spacing(5);
-
-        for (index, input) in self.url_input.data.iter() {
-            let mut text_input = text_input("Url", &input.value)
-                .style(styles::text_input::url_input_style(input.status))
-                .size(18)
-                .padding(8);
-
-            if input.status == UrlStatus::Invalid || input.status == UrlStatus::None {
-                text_input = text_input
-                    .on_input(|value| Message::UrlInput((*index, value)))
-                    .on_submit(Message::AddUrl(*index));
-            }
-
-            let mut row = Row::new()
-                .spacing(5)
-                .align_y(Alignment::Center)
-                .push(text_input);
-
-            match input.status {
-                UrlStatus::None | UrlStatus::Invalid => {
-                    row = row.push(
-                        button(
-                            svg(svg::Handle::from_memory(TRASH_ICON))
-                                .width(Length::Fixed(22_f32))
-                                .height(Length::Fixed(22_f32)),
-                        )
-                        .style(button::background)
-                        .on_press(Message::RemoveInput(*index))
-                        .padding(4),
-                    );
-                }
-                UrlStatus::Loading => {
-                    row = row.push(LoadingWheelWidget::new().size(30.0));
-                }
-                UrlStatus::Loaded => {
-                    let theme = self.settings.config.get_theme();
-                    let palette = theme.extended_palette();
-                    let color = Some(palette.success.strong.color);
-                    let style = styles::svg::svg_icon_style(color);
-                    row = row.push(
-                        container(
-                            svg(svg::Handle::from_memory(CHECK_ICON))
-                                .width(Length::Fixed(26_f32))
-                                .height(Length::Fixed(26_f32))
-                                .style(style),
-                        )
-                        .padding(2),
-                    );
-                }
-            }
-
-            inputs = inputs.push(row);
-        }
-
-        inputs.into()
-    }
-
     fn start_workers(&self, workers: usize) -> WorkerState {
         let cancel = CancellationToken::new();
         let runner_sender = self
@@ -1027,6 +836,7 @@ impl From<Config> for App {
 
         Self {
             settings: Settings::new(config),
+            import: Import::new(),
             mega,
             worker: None,
             active_downloads: HashMap::new(),
@@ -1036,11 +846,8 @@ impl From<Config> for App {
             files: Vec::new(),
             file_filter: HashMap::new(),
             file_handles: HashSet::new(),
-            url_input: IndexMap::default(),
             expanded_files: HashMap::new(),
             route: Route::Home,
-            url_regex: Regex::new(r"https?://mega\.nz/(folder|file)/([\dA-Za-z]+)#([\dA-Za-z-_]+)")
-                .unwrap(),
             errors: Vec::new(),
             error_modal: None,
             all_paused: false,
