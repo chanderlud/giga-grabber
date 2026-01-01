@@ -2,14 +2,10 @@ use crate::helpers::UrlStatus;
 use iced::widget::text_input::{Status, Style};
 use iced::{Border, Theme, border};
 
-pub(crate) struct UrlInput {
-    pub(crate) mode: UrlStatus,
-}
-
-impl UrlInput {
-    pub(crate) fn style(&self, theme: &Theme, status: Status) -> Style {
+pub(crate) fn url_input_style(mode: UrlStatus) -> impl Fn(&Theme, Status) -> Style {
+    move |theme: &Theme, status: Status| {
         let palette = theme.extended_palette();
-        let border_color = match self.mode {
+        let border_color = match mode {
             UrlStatus::Invalid => palette.danger.strong.color,
             _ => palette.background.strong.color,
         };

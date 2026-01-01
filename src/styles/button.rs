@@ -1,17 +1,13 @@
 use iced::widget::button::{Status, Style};
 use iced::{Border, Color, Theme, border};
 
-pub(crate) struct Nav {
-    pub(crate) active: bool,
-}
-
-impl Nav {
-    pub(crate) fn style(&self, theme: &Theme, status: Status) -> Style {
+pub(crate) fn nav_style(active: bool) -> impl Fn(&Theme, Status) -> Style {
+    move |theme: &Theme, status: Status| {
         let palette = theme.extended_palette();
 
         match status {
             Status::Active => Style {
-                background: Some(if self.active {
+                background: Some(if active {
                     palette.background.strong.color.into()
                 } else {
                     Color::TRANSPARENT.into()
@@ -25,7 +21,7 @@ impl Nav {
                 ..Default::default()
             },
             Status::Hovered | Status::Pressed => Style {
-                background: Some(if self.active {
+                background: Some(if active {
                     palette.background.strong.color.into()
                 } else {
                     palette.background.stronger.color.into()

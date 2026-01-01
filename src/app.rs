@@ -3,7 +3,6 @@ use crate::helpers::*;
 use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::{MegaClient, NodeKind};
 use crate::resources::*;
-use crate::styles::svg::SvgIcon;
 use crate::{Download, MegaFile, ProxyMode, RunnerMessage, get_files, spawn_workers, styles};
 use futures::future::join_all;
 use iced::alignment::{Horizontal, Vertical};
@@ -579,7 +578,7 @@ impl App {
                                 .push(pause_button)
                                 .push(space::horizontal().width(Length::Fixed(7_f32))),
                         )
-                        .style(move |theme| styles::container::Download { index }.style(theme)),
+                        .style(styles::container::download_style(index)),
                     );
                 }
 
@@ -1024,10 +1023,10 @@ impl App {
         disabled: bool,
     ) -> Element<'a, Message> {
         let palette = theme.extended_palette();
-        let style = if disabled {
-            SvgIcon::new(palette.secondary.weak.color.into())
+        let color = if disabled {
+            Some(palette.secondary.weak.color.into())
         } else {
-            SvgIcon::new(palette.primary.strong.color.into())
+            Some(palette.primary.strong.color.into())
         };
 
         let mut row = Row::new()
@@ -1035,11 +1034,11 @@ impl App {
             .height(Length::Fixed(40_f32));
 
         if self.route == route {
-            let style = style.clone();
+            let style = styles::svg::svg_icon_style(color);
             row = row
                 .push(
                     svg(svg::Handle::from_memory(SELECTED_ICON))
-                        .style(move |theme, status| style.style(theme, status))
+                        .style(move |theme, status| style(theme, status))
                         .width(Length::Fixed(4_f32))
                         .height(Length::Fixed(25_f32)),
                 )
@@ -1055,27 +1054,25 @@ impl App {
             Route::Settings => svg::Handle::from_memory(SETTINGS_ICON),
         };
 
+        let svg_style = styles::svg::svg_icon_style(color);
         row = row
             .push(
                 container(
                     svg(handle)
                         .width(Length::Fixed(28_f32))
                         .height(Length::Fixed(28_f32))
-                        .style(move |theme, status| style.style(theme, status)),
+                        .style(move |theme, status| svg_style(theme, status)),
                 )
                 .padding(4)
                 .style({
                     let is_active = self.route == route;
-                    move |theme| styles::container::Icon::new(is_active).style(theme)
+                    styles::container::icon_style(is_active)
                 }),
             )
             .push(space::horizontal().width(Length::Fixed(12_f32)));
 
-        let nav_style = styles::button::Nav {
-            active: self.route == route,
-        };
         let mut button = button(row.push(text(label)))
-            .style(move |theme, status| nav_style.style(theme, status))
+            .style(styles::button::nav_style(self.route == route))
             .width(Length::Fill)
             .padding(0);
 
@@ -1102,9 +1099,8 @@ impl App {
         let mut inputs = Column::new().spacing(5);
 
         for (index, input) in self.url_input.data.iter() {
-            let url_input_style = styles::text_input::UrlInput { mode: input.status };
             let mut text_input = text_input("Url", &input.value)
-                .style(move |theme, status| url_input_style.style(theme, status))
+                .style(styles::text_input::url_input_style(input.status))
                 .size(18)
                 .padding(8);
 
@@ -1229,7 +1225,7 @@ impl App {
                             )
                             .push(space::horizontal().width(Length::Fixed(8_f32))),
                     )
-                    .style(move |theme: &Theme| styles::container::Download { index }.style(theme))
+                    .style(styles::container::download_style(index))
                     .width(Length::Fill),
                 )
             }
@@ -1270,12 +1266,7 @@ impl App {
                     self.config.proxies.first().unwrap_or(&String::new()),
                 )
                 .on_input(Message::ProxyUrlChanged)
-                .style(|theme, status| {
-                    styles::text_input::UrlInput {
-                        mode: UrlStatus::None,
-                    }
-                    .style(theme, status)
-                })
+                .style(styles::text_input::url_input_style(UrlStatus::None))
                 .padding(6),
             );
         }
