@@ -455,6 +455,8 @@ impl App {
                 if proxy_mode == ProxyMode::Single {
                     // if we're switching to single proxy mode, truncate the proxy list to 1
                     self.config.proxies.truncate(1);
+                } else if proxy_mode == ProxyMode::None {
+                    self.config.proxies.clear();
                 }
                 self.config.proxy_mode = proxy_mode; // update the config
                 self.rebuild_available = true; // there are changes that can be applied now
@@ -556,7 +558,7 @@ impl App {
                                 .push(space::horizontal().width(Length::Fixed(3_f32)))
                                 .push(
                                     progress_bar(0_f32..=1_f32, progress)
-                                        .style(progress_bar::danger)
+                                        .style(styles::progress_bar::custom_style)
                                         .length(Length::Fixed(80_f32))
                                         .girth(Length::Fixed(15_f32)),
                                 )
@@ -965,7 +967,7 @@ impl App {
                 .push(
                     checkbox(*self.file_filter.get(&file.node.handle).unwrap_or(&true))
                         .on_toggle(|value| Message::ToggleFile(Box::new((value, file.clone()))))
-                        .style(checkbox::danger),
+                        .style(checkbox::primary),
                 )
                 .into()
         } else {
@@ -996,7 +998,7 @@ impl App {
                     .push(
                         checkbox(*self.file_filter.get(&file.node.handle).unwrap_or(&true))
                             .on_toggle(|value| Message::ToggleFile(Box::new((value, file.clone()))))
-                            .style(checkbox::danger),
+                            .style(checkbox::primary),
                     ),
             );
 
@@ -1343,8 +1345,8 @@ impl From<Config> for App {
             url_input: IndexMap::default(),
             expanded_files: HashMap::new(),
             route: Route::Home,
-            url_regex: Regex::new("https?://mega\\.nz/(folder|file)/([\\dA-Za-z]+)#([\\dA-Za-z-_]+)").unwrap(),
-            proxy_regex: Regex::new("(?:(?:https?|socks5h?)://)(?:(?:[a-zA-Z\\d]+(?::[a-zA-Z\\d]+)?@)?)(?:(?:[a-z\\d](?:[a-z\\d\\-]{0,61}[a-z\\d])?\\.)+[a-z\\d][a-z\\d\\-]{0,61}[a-z\\d]|(?:\\d{1,3}\\.){3}\\d{1,3})(:\\d{1,5})").unwrap(),
+            url_regex: Regex::new(r"https?://mega\.nz/(folder|file)/([\dA-Za-z]+)#([\dA-Za-z-_]+)").unwrap(),
+            proxy_regex: Regex::new(r"(?:https?|socks5h?)://(?:[a-zA-Z\d]+(?::[a-zA-Z\d]+)?@)?(?:(?:[a-z\d](?:[a-z\d\-]{0,61}[a-z\d])?\.)+[a-z\d][a-z\d\-]{0,61}[a-z\d]|(?:\d{1,3}\.){3}\d{1,3})(:\d{1,5})").unwrap(),
             errors: Vec::new(),
             error_modal: None,
             all_paused: false,

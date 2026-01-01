@@ -105,7 +105,7 @@ where
         &self,
         tree: &Tree,
         renderer: &mut Renderer,
-        _theme: &iced::Theme,
+        theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
@@ -133,7 +133,7 @@ where
                 let circle_center = center + position;
 
                 let path = canvas::Path::circle(circle_center, circle.radius);
-                frame.fill(&path, Color::from_rgb8(255, 48, 78));
+                frame.fill(&path, theme.extended_palette().primary.strong.color);
             }
         });
 
