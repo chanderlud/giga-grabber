@@ -10,7 +10,7 @@ use iced::{Alignment, Element, Length, Task, Theme, clipboard};
 use regex::Regex;
 
 #[derive(Debug, Clone)]
-pub enum Message {
+pub(crate) enum Message {
     /// trigger clipboard read
     AddUrlClipboard,
     /// clipboard contents received
@@ -29,20 +29,20 @@ pub enum Message {
     RemoveInput(usize),
 }
 
-pub enum Action {
+pub(crate) enum Action {
     None,
     Run(Task<Message>),
     FilesLoaded(Vec<MegaFile>),
     ShowError(String),
 }
 
-pub struct Import {
+pub(crate) struct Import {
     url_input: IndexMap<UrlInput>,
     url_regex: Regex,
 }
 
 impl Import {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             url_input: IndexMap::default(),
             url_regex: Regex::new(r"https?://mega\.nz/(folder|file)/([\dA-Za-z]+)#([\dA-Za-z-_]+)")
@@ -50,13 +50,13 @@ impl Import {
         }
     }
 
-    pub fn clear_loaded_inputs(&mut self) {
+    pub(crate) fn clear_loaded_inputs(&mut self) {
         self.url_input
             .data
             .retain(|_, input| input.status != UrlStatus::Loaded);
     }
 
-    pub fn update(&mut self, message: Message, mega: &MegaClient) -> Action {
+    pub(crate) fn update(&mut self, message: Message, mega: &MegaClient) -> Action {
         match message {
             Message::AddUrlClipboard => Action::Run(clipboard::read().map(Message::GotClipboard)),
             Message::GotClipboard(contents) => {
@@ -87,7 +87,8 @@ impl Import {
                         Action::None
                     } else {
                         match input.status {
-                            UrlStatus::Loading | UrlStatus::Loaded => Action::None, // dont do anything if url is already loading or loaded
+                            // dont do anything if url is already loading or loaded
+                            UrlStatus::Loading | UrlStatus::Loaded => Action::None,
                             _ => {
                                 input.status = UrlStatus::Loading; // set status to loading
                                 let url = input.value.clone();
@@ -161,7 +162,7 @@ impl Import {
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub(crate) fn view(&self) -> Element<'_, Message> {
         container(
             Column::new()
                 .spacing(5)

@@ -109,7 +109,23 @@ where
     }
 
     pub(crate) fn update(&mut self, index: usize, value: T) -> Option<T> {
-        self.data.insert(index, value)
+        let existed = self.data.contains_key(&index);
+        let prev = self.data.insert(index, value);
+
+        // If we inserted a new key manually, keep the internal bookkeeping consistent:
+        // - avoid handing out this index again via `insert` (remove from unused_indices)
+        // - avoid reusing `next_index` if caller inserted at/above it
+        if !existed {
+            if let Some(pos) = self.unused_indices.iter().position(|&i| i == index) {
+                self.unused_indices.swap_remove(pos);
+            }
+
+            if index >= self.next_index {
+                self.next_index = index + 1;
+            }
+        }
+
+        prev
     }
 
     pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut T> {
