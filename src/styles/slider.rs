@@ -10,7 +10,7 @@ pub(crate) fn slider_style(theme: &Theme, status: Status) -> Style {
         Status::Active | Status::Dragged => Style {
             rail: Rail {
                 backgrounds: (primary_color.into(), primary_color.into()),
-                width: 6_f32,
+                width: 5_f32,
                 border: Border::default().rounded(4.0),
             },
             handle: Handle {
@@ -26,7 +26,7 @@ pub(crate) fn slider_style(theme: &Theme, status: Status) -> Style {
                     palette.primary.base.color.into(),
                     palette.primary.base.color.into(),
                 ),
-                width: 6_f32,
+                width: 5_f32,
                 border: Border::default().rounded(4.0),
             },
             handle: Handle {
