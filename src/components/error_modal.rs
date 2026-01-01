@@ -2,15 +2,12 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
     Column, Row, button, center, container, mouse_area, opaque, space, stack, text,
 };
-use iced::{Color, Element, Length, Theme};
+use iced::{Color, Element, Length, border};
 
 pub(crate) fn error_modal<'a, Message: 'a>(
     error_message: &'a str,
-    theme: &Theme,
     content: Element<'a, Message>,
 ) -> Element<'a, ()> {
-    let error_color = theme.extended_palette().danger.strong.color;
-
     stack![
         content.map(|_| ()),
         opaque(
@@ -21,7 +18,7 @@ pub(crate) fn error_modal<'a, Message: 'a>(
                             .spacing(5)
                             .push(
                                 text(error_message)
-                                    .color(error_color)
+                                    .size(18)
                                     .align_y(Vertical::Center)
                                     .align_x(Horizontal::Center),
                             )
@@ -33,9 +30,18 @@ pub(crate) fn error_modal<'a, Message: 'a>(
                                     .push(button(" Ok ").style(button::primary).on_press(())),
                             ),
                     )
-                    .width(Length::Fixed(150_f32))
+                    .width(Length::Fixed(250_f32))
                     .padding(10)
-                    .style(container::rounded_box)
+                    .style(|theme| {
+                        let palette = theme.extended_palette();
+
+                        container::Style {
+                            background: Some(palette.background.weak.color.into()),
+                            text_color: Some(palette.background.weak.text),
+                            border: border::rounded(8),
+                            ..Default::default()
+                        }
+                    })
                 ))
                 .style(|_theme| container::Style {
                     background: Some(
@@ -45,7 +51,7 @@ pub(crate) fn error_modal<'a, Message: 'a>(
                         }
                         .into(),
                     ),
-                    ..container::Style::default()
+                    ..Default::default()
                 })
             )
             .on_press(())

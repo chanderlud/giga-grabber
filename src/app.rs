@@ -40,8 +40,37 @@ pub(crate) struct App {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        let config = Config::load().expect("failed to load config");
-        (config.into(), Task::none())
+        let (download_sender, download_receiver) = kanal::unbounded();
+        // load config from disk, falling back to a default config if needed
+        let (mut config, mut error_modal) = Config::new();
+        // build the mega client, falling back to default config if needed
+        let mega = loop {
+            if let Ok(client) = mega_builder(&config) {
+                break client;
+            } else {
+                error_modal =
+                    Some("Invalid config loaded from disk, applying default options".to_string());
+                config = Config::default();
+            }
+        };
+
+        (
+            Self {
+                settings: Settings::new(config),
+                import: Import::new(),
+                choose_files: None,
+                home: Home::new(),
+                mega,
+                worker: None,
+                runner_sender: None,
+                download_sender,
+                download_receiver: download_receiver.to_async(),
+                file_handles: HashSet::new(),
+                route: Route::Home,
+                error_modal,
+            },
+            Task::none(),
+        )
     }
 
     fn title(&self) -> String {
@@ -134,8 +163,9 @@ impl App {
                             }
                             // Start workers if needed
                             if self.worker.is_none() {
-                                self.worker =
-                                    Some(self.start_workers(self.settings.config.max_workers));
+                                self.worker = Some(
+                                    self.start_workers(self.settings.config.max_workers_bounded()),
+                                );
                             }
                             // Navigate to home
                             self.route = Route::Home;
@@ -255,19 +285,11 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         // build content
         let content = match self.route {
-            Route::Home => container(
-                self.home
-                    .view(&self.settings.config.get_theme())
-                    .map(Message::Home),
-            ),
+            Route::Home => container(self.home.view().map(Message::Home)),
             Route::Import => container(self.import.view().map(Message::Import)),
             Route::ChooseFiles => {
                 if let Some(choose_files) = &self.choose_files {
-                    container(
-                        choose_files
-                            .view(&self.settings.config.get_theme())
-                            .map(Message::ChooseFiles),
-                    )
+                    container(choose_files.view().map(Message::ChooseFiles))
                 } else {
                     container(text("No files loaded"))
                 }
@@ -276,42 +298,27 @@ impl App {
         };
 
         // nav + content = body
-        let nav_theme = self.settings.config.get_theme();
-        let mut body = Some(
-            container(
-                Row::new()
-                    .push(
-                        nav_sidebar::nav_sidebar(
-                            &self.route,
-                            &nav_theme,
-                            self.choose_files.is_none(),
-                        )
+        let body = container(
+            Row::new()
+                .push(
+                    nav_sidebar::nav_sidebar(&self.route, self.choose_files.is_none())
                         .map(Message::Navigate),
-                    )
-                    .push(content.padding(10).width(Length::Fill)),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        );
+                )
+                .push(content.padding(10).width(Length::Fill)),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         if let Some(error_message) = &self.error_modal {
-            error_modal::error_modal(
-                error_message,
-                &self.settings.config.get_theme(),
-                body.take().expect("body must be set"),
-            )
-            .map(|_| Message::CloseModal)
+            error_modal::error_modal(error_message, body.into()).map(|_| Message::CloseModal)
         } else {
-            body.take().expect("body must be set")
+            body.into()
         }
     }
 
-    // determines the correct Theme based on configuration & system settings
     fn theme(&self) -> Option<Theme> {
-        // Return None for system theme (Iced 0.14 handles this automatically)
-        // For explicit theme selection, return Some(theme)
-        Some(self.settings.config.get_theme())
+        // Return None for system theme
+        self.settings.config.get_theme()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -374,30 +381,6 @@ impl App {
                 // nothing currently queued
                 Ok(None) => break,
             }
-        }
-    }
-}
-
-impl From<Config> for App {
-    /// initializes the app from the config
-    fn from(config: Config) -> Self {
-        // build the mega client
-        let mega = mega_builder(&config).unwrap();
-        let (download_sender, download_receiver) = kanal::unbounded();
-
-        Self {
-            settings: Settings::new(config),
-            import: Import::new(),
-            choose_files: None,
-            home: Home::new(),
-            mega,
-            worker: None,
-            runner_sender: None,
-            download_sender,
-            download_receiver: download_receiver.to_async(),
-            file_handles: HashSet::new(),
-            route: Route::Home,
-            error_modal: None,
         }
     }
 }

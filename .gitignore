@@ -4,3 +4,4 @@ Cargo.lock
 config.json
 giga-grabber.log
 downloads
+.DS_Store

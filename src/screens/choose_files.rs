@@ -87,7 +87,7 @@ impl ChooseFiles {
         }
     }
 
-    pub(crate) fn view(&self, theme: &Theme) -> Element<'_, Message> {
+    pub(crate) fn view(&self) -> Element<'_, Message> {
         let mut column = Column::new().width(Length::Fill).spacing(5);
 
         let size: u64 = self
@@ -101,7 +101,7 @@ impl ChooseFiles {
         let size_gb = size as f64 / 1024f64.powi(3);
 
         for file in &self.files {
-            column = column.push(self.recursive_files(file, theme));
+            column = column.push(self.recursive_files(file));
         }
 
         container(
@@ -145,7 +145,7 @@ impl ChooseFiles {
         .into()
     }
 
-    fn recursive_files<'a>(&'a self, file: &'a MegaFile, theme: &Theme) -> Element<'a, Message> {
+    fn recursive_files<'a>(&'a self, file: &'a MegaFile) -> Element<'a, Message> {
         if file.children.is_empty() {
             Row::new()
                 .spacing(5)
@@ -162,9 +162,6 @@ impl ChooseFiles {
                 .into()
         } else {
             let expanded = *self.expanded_files.get(&file.node.handle).unwrap_or(&false);
-            let palette = theme.extended_palette();
-            let color = Some(palette.primary.base.color);
-            let style = styles::svg::svg_icon_style(color);
 
             let mut column = Column::new().spacing(5).push(
                 Row::new()
@@ -178,7 +175,7 @@ impl ChooseFiles {
                             }))
                             .height(Length::Fixed(16_f32))
                             .width(Length::Fixed(16_f32))
-                            .style(style),
+                            .style(styles::svg::primary_svg),
                         )
                         .style(button::background)
                         .on_press(Message::ToggleExpanded(file.node.handle.clone()))
@@ -201,7 +198,7 @@ impl ChooseFiles {
                     column = column.push(
                         Row::new()
                             .push(space::horizontal().width(Length::Fixed(20.0)))
-                            .push(self.recursive_files(file, theme)),
+                            .push(self.recursive_files(file)),
                     );
                 }
             }

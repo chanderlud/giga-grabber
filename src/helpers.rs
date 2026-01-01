@@ -136,35 +136,31 @@ pub(crate) struct WorkerState {
 
 /// build a new mega client from config
 pub(crate) fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
-    if config.proxy_mode != ProxyMode::None && config.proxies.is_empty() {
-        Err(anyhow::Error::msg("no proxies"))
-    } else {
-        // build http client
-        let http_client = Client::builder()
-            .proxy(Proxy::custom({
-                let proxies = config.proxies.clone();
-                let proxy_mode = config.proxy_mode;
+    config
+        .validate()
+        .map_err(|message| anyhow::anyhow!("invalid config: {message}"))?;
 
-                move |_| match proxy_mode {
-                    ProxyMode::Random => {
-                        let i = fastrand::usize(..proxies.len());
-                        let proxy_url = &proxies[i];
-                        Url::parse(proxy_url).unwrap().into()
-                    }
-                    ProxyMode::Single => {
-                        let proxy_url = &proxies[0];
-                        Url::parse(proxy_url).unwrap().into()
-                    }
-                    ProxyMode::None => None::<Url>,
+    // build http client
+    let http_client = Client::builder()
+        .proxy(Proxy::custom({
+            let proxies = config.proxies.clone();
+            let proxy_mode = config.proxy_mode;
+
+            move |_| match proxy_mode {
+                ProxyMode::Random => {
+                    let i = fastrand::usize(..proxies.len());
+                    Some(proxies[i].clone())
                 }
-            }))
-            .connect_timeout(config.timeout)
-            .read_timeout(config.timeout)
-            .tcp_keepalive(None)
-            .build()?;
+                ProxyMode::Single => Some(proxies[0].clone()),
+                ProxyMode::None => None::<Url>,
+            }
+        }))
+        .connect_timeout(config.timeout)
+        .read_timeout(config.timeout)
+        .tcp_keepalive(None)
+        .build()?;
 
-        MegaClient::new(http_client)
-    }
+    MegaClient::new(http_client)
 }
 
 pub(crate) fn runner_worker() -> impl Stream<Item = Message> {

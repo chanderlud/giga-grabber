@@ -1,6 +1,6 @@
 use crate::ProxyMode;
 use crate::app::MONOSPACE;
-use crate::config::Config;
+use crate::config::{Config, MAX_CONCURRENCY, MAX_MAX_WORKERS, MIN_CONCURRENCY, MIN_MAX_WORKERS};
 use crate::helpers::{UrlStatus, pad_usize};
 use crate::resources::X_ICON;
 use crate::styles;
@@ -11,25 +11,26 @@ use iced::widget::{
 use iced::{Element, Length, Theme};
 use native_dialog::FileDialog;
 use num_traits::cast::ToPrimitive;
-use regex::Regex;
 use std::borrow::Cow;
 use std::io::Read;
 use std::ops::RangeInclusive;
 use std::time::Duration;
+use url::Url;
 
 #[derive(Clone)]
-pub struct Settings {
-    pub config: Config,
-    pub rebuild_available: bool,
-    pub proxy_regex: Regex,
+pub(crate) struct Settings {
+    pub(crate) config: Config,
+    pub(crate) rebuild_available: bool,
+    proxy_input: String,
+    theme_options: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-pub enum Message {
+pub(crate) enum Message {
     SettingsSlider((usize, f64)),
     SaveConfig,
     ResetConfig,
-    ThemeChanged(Theme),
+    ThemeChanged(String),
     ProxyModeChanged(ProxyMode),
     ProxyUrlChanged(String),
     AddProxies,
@@ -37,7 +38,7 @@ pub enum Message {
     RebuildMega,
 }
 
-pub enum Action {
+pub(crate) enum Action {
     None,
     ConfigSaved,
     RebuildRequired(Config),
@@ -45,19 +46,34 @@ pub enum Action {
 }
 
 impl Settings {
-    pub fn new(config: Config) -> Self {
+    pub(crate) fn new(config: Config) -> Self {
+        let mut themes = vec!["System".to_string()];
+        themes.extend(Theme::ALL.iter().map(|t| t.to_string()));
+
         Self {
-            proxy_regex: Regex::new(r"^(http|https|socks5)://").unwrap(),
             rebuild_available: false,
             config,
+            proxy_input: String::new(),
+            theme_options: themes,
         }
     }
 
-    pub fn set_rebuild_available(&mut self, flag: bool) {
+    pub(crate) fn set_rebuild_available(&mut self, flag: bool) {
         self.rebuild_available = flag;
     }
 
-    pub fn update(&mut self, message: Message) -> Action {
+    pub(crate) fn update(&mut self, message: Message) -> Action {
+        // handle proxy input validation in one place
+        if matches!(message, Message::SaveConfig | Message::RebuildMega)
+            && self.config.proxy_mode == ProxyMode::Single
+        {
+            if let Ok(proxy) = Url::parse(&self.proxy_input) {
+                self.config.proxies = vec![proxy];
+            } else {
+                return Action::ShowError("Invalid proxy URL".to_string());
+            }
+        }
+
         match message {
             Message::SettingsSlider((index, value)) => {
                 match index {
@@ -98,17 +114,14 @@ impl Settings {
                 Action::None
             }
             Message::SaveConfig => {
-                for proxy in &self.config.proxies {
-                    if !self.proxy_regex.is_match(proxy) {
-                        return Action::ShowError(format!("Invalid proxy url: {}", proxy));
-                    }
+                self.config.normalize();
+                if let Err(message) = self.config.validate() {
+                    Action::ShowError(message)
+                } else if let Err(error) = self.config.save() {
+                    Action::ShowError(format!("Failed to save configuration: {}", error))
+                } else {
+                    Action::ConfigSaved
                 }
-
-                if let Err(error) = self.config.save() {
-                    return Action::ShowError(format!("Failed to save configuration: {}", error));
-                }
-
-                Action::ConfigSaved
             }
             Message::ResetConfig => {
                 self.config = Config::default();
@@ -116,25 +129,25 @@ impl Settings {
                 Action::None
             }
             Message::ThemeChanged(theme) => {
-                self.config.set_theme(theme);
+                self.config.theme = theme;
                 Action::None
             }
             Message::ProxyModeChanged(proxy_mode) => {
                 if proxy_mode == ProxyMode::Single {
                     self.config.proxies.truncate(1);
+                    if let Some(proxy) = self.config.proxies.first() {
+                        self.proxy_input = proxy.to_string();
+                    }
                 } else if proxy_mode == ProxyMode::None {
                     self.config.proxies.clear();
+                    self.proxy_input.clear();
                 }
                 self.config.proxy_mode = proxy_mode;
                 self.rebuild_available = true;
                 Action::None
             }
             Message::ProxyUrlChanged(value) => {
-                if let Some(proxy_url) = self.config.proxies.get_mut(0) {
-                    *proxy_url = value;
-                } else {
-                    self.config.proxies.push(value);
-                }
+                self.proxy_input = value;
                 self.rebuild_available = true;
                 Action::None
             }
@@ -149,9 +162,9 @@ impl Settings {
                             file.read_to_string(&mut contents).unwrap();
 
                             let mut any_added = false;
-                            for proxy in contents.lines() {
-                                if self.proxy_regex.is_match(proxy) {
-                                    self.config.proxies.push(proxy.to_string());
+                            for line in contents.lines() {
+                                if let Ok(url) = Url::parse(line) {
+                                    self.config.proxies.push(url);
                                     any_added = true;
                                 }
                             }
@@ -174,18 +187,17 @@ impl Settings {
                 Action::None
             }
             Message::RebuildMega => {
-                for proxy in &self.config.proxies {
-                    if !self.proxy_regex.is_match(proxy) {
-                        return Action::ShowError(format!("Invalid proxy url: {}", proxy));
-                    }
+                self.config.normalize();
+                if let Err(message) = self.config.validate() {
+                    Action::ShowError(message)
+                } else {
+                    Action::RebuildRequired(self.config.clone())
                 }
-
-                Action::RebuildRequired(self.config.clone())
             }
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub(crate) fn view(&self) -> Element<'_, Message> {
         let mut apply_button = button(" Apply ").style(button::primary);
 
         if self.rebuild_available {
@@ -198,13 +210,13 @@ impl Settings {
                 .push(self.settings_slider(
                     0,
                     self.config.max_workers,
-                    1_f64..=10_f64,
+                    MIN_MAX_WORKERS as f64..=MAX_MAX_WORKERS as f64,
                     "Max Workers:",
                 ))
                 .push(self.settings_slider(
                     1,
                     self.config.concurrency_budget,
-                    1_f64..=100_f64,
+                    MIN_CONCURRENCY as f64..=MAX_CONCURRENCY as f64,
                     "Concurrency Budget:",
                 ))
                 .push(self.settings_slider(
@@ -240,8 +252,8 @@ impl Settings {
                         .push(space::horizontal())
                         .push(
                             pick_list(
-                                Theme::ALL,
-                                Some(self.config.get_theme()),
+                                self.theme_options.clone(),
+                                Some(self.config.theme.clone()),
                                 Message::ThemeChanged,
                             )
                             .width(Length::Fixed(170_f32)),
@@ -340,7 +352,7 @@ impl Settings {
                     container(
                         Row::new()
                             .padding(4)
-                            .push(text(proxy))
+                            .push(text(proxy.to_string()))
                             .push(space::horizontal())
                             .push(
                                 button(
@@ -390,13 +402,10 @@ impl Settings {
             );
         } else if self.config.proxy_mode == ProxyMode::Single {
             column = column.push(
-                text_input(
-                    "Proxy url",
-                    self.config.proxies.first().unwrap_or(&String::new()),
-                )
-                .on_input(Message::ProxyUrlChanged)
-                .style(styles::text_input::url_input_style(UrlStatus::None))
-                .padding(6),
+                text_input("Proxy url", &self.proxy_input)
+                    .on_input(Message::ProxyUrlChanged)
+                    .style(styles::text_input::url_input_style(UrlStatus::None))
+                    .padding(6),
             );
         }
 

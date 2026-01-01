@@ -14,7 +14,11 @@ use tokio_util::sync::CancellationToken;
 /// Run a simple CLI download given a MEGA URL.
 /// This uses the same worker pipeline as the GUI and shows a progress bar.
 pub(crate) async fn run_cli(url: String) -> Result<()> {
-    let config = Config::load().expect("config error");
+    let (config, message_option) = Config::new();
+    if let Some(message) = message_option {
+        println!("{}", message);
+    }
+
     let client = mega_builder(&config)?;
 
     let (files, _) = get_files(client.clone(), url.clone(), 0)
@@ -87,7 +91,7 @@ pub(crate) async fn run_cli(url: String) -> Result<()> {
         download_sender.clone(),
         message_sender.clone(),
         cancellation_token.clone(),
-        config.max_workers,
+        config.max_workers_bounded(),
     );
 
     // progress updater task: sum all `downloaded` counters

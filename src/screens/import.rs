@@ -6,7 +6,7 @@ use crate::mega_client::MegaClient;
 use crate::resources::{CHECK_ICON, TRASH_ICON};
 use crate::styles;
 use iced::widget::*;
-use iced::{Alignment, Element, Length, Task, Theme, clipboard};
+use iced::{Alignment, Element, Length, Task, clipboard};
 use regex::Regex;
 
 #[derive(Debug, Clone)]
@@ -72,7 +72,7 @@ impl Import {
                         // load the url
                         Action::Run(Task::perform(async move { index }, Message::AddUrl))
                     } else {
-                        Action::ShowError("Invalid url".to_string())
+                        Action::ShowError("Invalid URL".to_string())
                     }
                 } else {
                     Action::ShowError("Clipboard is empty".to_string())
@@ -232,10 +232,7 @@ impl Import {
                             svg(svg::Handle::from_memory(CHECK_ICON))
                                 .width(Length::Fixed(26_f32))
                                 .height(Length::Fixed(26_f32))
-                                .style(|theme: &Theme, status| {
-                                    let color = Some(theme.extended_palette().success.strong.color);
-                                    styles::svg::svg_icon_style(color)(theme, status)
-                                }),
+                                .style(styles::svg::primary_svg),
                         )
                         .padding(2),
                     );

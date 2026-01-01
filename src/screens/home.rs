@@ -111,17 +111,17 @@ impl Home {
         }
     }
 
-    pub(crate) fn view(&self, theme: &Theme) -> Element<'_, Message> {
+    pub(crate) fn view(&self) -> Element<'_, Message> {
         let mut download_list = Column::new();
 
         for (index, (_id, download)) in self.active_downloads.iter().enumerate() {
-            download_list = download_list.push(
-                download_item::download_item(download, index, theme).map(|msg| match msg {
+            download_list = download_list.push(download_item::download_item(download, index).map(
+                |msg| match msg {
                     download_item::Message::Pause(id) => Message::PauseDownload(id),
                     download_item::Message::Resume(id) => Message::ResumeDownload(id),
                     download_item::Message::Cancel(id) => Message::CancelDownload(id),
-                }),
-            );
+                },
+            ));
         }
 
         if self.active_downloads.is_empty() {
@@ -177,7 +177,7 @@ impl Home {
             )
         }
 
-        let mut error_log = Column::new().push(scrollable(self.error_log(theme)));
+        let mut error_log = Column::new().push(scrollable(self.error_log()));
 
         if self.errors.is_empty() {
             error_log = error_log.push(
@@ -212,12 +212,11 @@ impl Home {
         .into()
     }
 
-    fn error_log(&self, theme: &Theme) -> Element<'_, Message> {
-        let error_color = theme.extended_palette().danger.strong.color;
+    fn error_log(&self) -> Element<'_, Message> {
         let mut column = Column::new().spacing(2).width(Length::Fill);
 
         for error in &self.errors {
-            column = column.push(text(error).color(error_color));
+            column = column.push(text(error).style(text::danger));
         }
 
         column.into()

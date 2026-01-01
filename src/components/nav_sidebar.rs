@@ -6,26 +6,18 @@ use iced::{Alignment, Element, Length, Theme};
 
 pub(crate) fn nav_sidebar(
     current_route: &Route,
-    theme: &Theme,
     choose_files_disabled: bool,
 ) -> Element<'static, Route> {
     container(
         Column::new()
             .padding(4)
             .spacing(4)
-            .push(nav_button("Home", Route::Home, current_route, theme, false))
-            .push(nav_button(
-                "Import",
-                Route::Import,
-                current_route,
-                theme,
-                false,
-            ))
+            .push(nav_button("Home", Route::Home, current_route, false))
+            .push(nav_button("Import", Route::Import, current_route, false))
             .push(nav_button(
                 "Choose files",
                 Route::ChooseFiles,
                 current_route,
-                theme,
                 choose_files_disabled,
             ))
             .push(space::vertical().height(Length::Fill))
@@ -33,7 +25,6 @@ pub(crate) fn nav_sidebar(
                 "Settings",
                 Route::Settings,
                 current_route,
-                theme,
                 false,
             )),
     )
@@ -53,22 +44,14 @@ pub(crate) fn nav_button<'a>(
     label: &'a str,
     route: Route,
     current_route: &Route,
-    theme: &Theme,
     disabled: bool,
 ) -> Element<'a, Route> {
-    let palette = theme.extended_palette();
-    let color = if disabled {
-        Some(palette.secondary.weak.color)
-    } else {
-        Some(palette.primary.strong.color)
-    };
-
     let mut row = Row::new()
         .align_y(Alignment::Center)
         .height(Length::Fixed(40_f32));
 
     if current_route == &route {
-        let style = styles::svg::svg_icon_style(color);
+        let style = styles::svg::nav_svg(disabled);
         row = row
             .push(
                 svg(svg::Handle::from_memory(SELECTED_ICON))
@@ -88,14 +71,13 @@ pub(crate) fn nav_button<'a>(
         Route::Settings => svg::Handle::from_memory(SETTINGS_ICON),
     };
 
-    let svg_style = styles::svg::svg_icon_style(color);
     row = row
         .push(
             container(
                 svg(handle)
                     .width(Length::Fixed(28_f32))
                     .height(Length::Fixed(28_f32))
-                    .style(svg_style),
+                    .style(styles::svg::nav_svg(disabled)),
             )
             .padding(4)
             .style({

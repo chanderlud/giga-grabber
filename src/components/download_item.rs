@@ -5,7 +5,7 @@ use crate::resources::{PAUSE_ICON, PLAY_ICON, X_ICON};
 use crate::styles;
 use iced::alignment::Vertical;
 use iced::widget::{Row, container, progress_bar, space, text};
-use iced::{Alignment, Element, Length, Theme};
+use iced::{Alignment, Element, Length};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
@@ -14,14 +14,7 @@ pub(crate) enum Message {
     Cancel(String),
 }
 
-pub(crate) fn download_item<'a>(
-    download: &'a Download,
-    index: usize,
-    theme: &Theme,
-) -> Element<'a, Message> {
-    let palette = theme.extended_palette();
-    let icon_color = Some(palette.primary.base.color);
-
+pub(crate) fn download_item(download: &'_ Download, index: usize) -> Element<'_, Message> {
     let mut progress = download.progress();
     if progress < 0.1 && progress > 0_f32 {
         progress = 0.1;
@@ -29,14 +22,19 @@ pub(crate) fn download_item<'a>(
 
     let id = download.node.handle.clone();
 
-    let icon_style_pause = styles::svg::svg_icon_style(icon_color);
     let pause_button = if download.is_paused() {
-        icon_button(PLAY_ICON, Message::Resume(id.clone()), icon_style_pause)
+        icon_button(
+            PLAY_ICON,
+            Message::Resume(id.clone()),
+            styles::svg::primary_svg,
+        )
     } else {
-        icon_button(PAUSE_ICON, Message::Pause(id.clone()), icon_style_pause)
+        icon_button(
+            PAUSE_ICON,
+            Message::Pause(id.clone()),
+            styles::svg::primary_svg,
+        )
     };
-
-    let icon_style_x = styles::svg::svg_icon_style(icon_color);
 
     container(
         Row::new()
@@ -70,7 +68,7 @@ pub(crate) fn download_item<'a>(
             .push(icon_button(
                 X_ICON,
                 Message::Cancel(id.clone()),
-                icon_style_x,
+                styles::svg::primary_svg,
             ))
             .push(pause_button)
             .push(space::horizontal().width(Length::Fixed(7_f32))),

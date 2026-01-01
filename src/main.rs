@@ -347,7 +347,7 @@ async fn worker(
                     match retry_decision(elapsed, retries, &config) {
                         RetryDecision::Wait => {
                              // avoid hammering workers with the same task
-                            if download_sender.len() < config.max_workers {
+                            if download_sender.len() < config.max_workers_bounded() {
                                 sleep(Duration::from_millis(10)).await;
                             }
                             // requeue download
