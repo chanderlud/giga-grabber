@@ -22,7 +22,7 @@ pub(crate) fn icon_style(active: bool) -> impl Fn(&Theme) -> Style {
         Style {
             text_color: None,
             background: if active {
-                Some(palette.background.strong.color.into())
+                Some(palette.background.weakest.color.into())
             } else {
                 None
             },
