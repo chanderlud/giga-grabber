@@ -50,12 +50,19 @@ impl Settings {
         let mut themes = vec!["System".to_string()];
         themes.extend(Theme::ALL.iter().map(|t| t.to_string()));
 
-        Self {
+        let mut settings = Self {
             rebuild_available: false,
             config,
             proxy_input: String::new(),
             theme_options: themes,
+        };
+
+        // Preserve single-proxy input state when reconstructing Settings from an existing config.
+        if settings.config.proxy_mode == ProxyMode::Single && !settings.config.proxies.is_empty() {
+            settings.proxy_input = settings.config.proxies[0].to_string();
         }
+
+        settings
     }
 
     pub(crate) fn set_rebuild_available(&mut self, flag: bool) {
@@ -67,10 +74,15 @@ impl Settings {
         if matches!(message, Message::SaveConfig | Message::RebuildMega)
             && self.config.proxy_mode == ProxyMode::Single
         {
-            if let Ok(proxy) = Url::parse(&self.proxy_input) {
-                self.config.proxies = vec![proxy];
-            } else {
-                return Action::ShowError("Invalid proxy URL".to_string());
+            let config_proxy = self.config.proxies.first().map(|p| p.to_string());
+            if self.config.proxies.is_empty()
+                || config_proxy.as_deref() != Some(self.proxy_input.as_str())
+            {
+                if let Ok(proxy) = Url::parse(&self.proxy_input) {
+                    self.config.proxies = vec![proxy];
+                } else {
+                    return Action::ShowError("Invalid proxy URL".to_string());
+                }
             }
         }
 
