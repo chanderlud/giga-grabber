@@ -2,7 +2,8 @@ use crate::config::Config;
 use crate::helpers::mega_builder;
 use crate::mega_client::NodeKind;
 use crate::{Download, RunnerMessage, get_files, spawn_workers};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::error;
 use std::sync::Arc;
@@ -11,15 +12,123 @@ use std::time::Duration;
 use tokio::sync::mpsc::channel;
 use tokio_util::sync::CancellationToken;
 
-/// Run a simple CLI download given a MEGA URL.
-/// This uses the same worker pipeline as the GUI and shows a progress bar.
-pub(crate) async fn run_cli(url: String) -> Result<()> {
-    let (config, message_option) = Config::new();
-    if let Some(message) = message_option {
-        println!("{}", message);
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "giga-grabber",
+    version,
+    about = "High-performance MEGA downloader"
+)]
+pub(crate) struct CliArgs {
+    /// MEGA URL to download
+    #[arg(help = "MEGA URL to download")]
+    pub(crate) url: String,
+
+    /// Maximum number of concurrent download workers (1-10, default: 10)
+    #[arg(
+        long,
+        help = "Maximum number of concurrent download workers (1-10, default: 10)"
+    )]
+    pub(crate) max_workers: Option<usize>,
+
+    /// Concurrency budget for weighted downloads (1-100, default: 10)
+    #[arg(
+        long,
+        help = "Concurrency budget for weighted downloads (1-100, default: 10)"
+    )]
+    pub(crate) concurrency_budget: Option<usize>,
+
+    /// Maximum number of retry attempts (default: 3)
+    #[arg(long, help = "Maximum number of retry attempts (default: 3)")]
+    pub(crate) max_retries: Option<u32>,
+
+    /// Request timeout in seconds (default: 20)
+    #[arg(long, help = "Request timeout in seconds (default: 20)")]
+    pub(crate) timeout: Option<u64>,
+
+    /// Maximum retry delay in seconds (default: 30)
+    #[arg(long, help = "Maximum retry delay in seconds (default: 30)")]
+    pub(crate) max_retry_delay: Option<u64>,
+
+    /// Minimum retry delay in seconds (default: 10)
+    #[arg(long, help = "Minimum retry delay in seconds (default: 10)")]
+    pub(crate) min_retry_delay: Option<u64>,
+
+    /// Proxy mode: none, single, or random (default: none)
+    #[arg(
+        long,
+        value_enum,
+        help = "Proxy mode: none, single, or random (default: none)"
+    )]
+    pub(crate) proxy_mode: Option<crate::ProxyMode>,
+
+    /// Proxy URL (can be specified multiple times for random mode)
+    #[arg(
+        long = "proxies",
+        help = "Proxy URL (can be specified multiple times for random mode)"
+    )]
+    pub(crate) proxies: Vec<String>,
+}
+
+impl CliArgs {
+    pub(crate) fn timeout_duration(&self) -> Option<Duration> {
+        self.timeout.map(Duration::from_secs)
     }
 
+    pub(crate) fn max_retry_delay_duration(&self) -> Option<Duration> {
+        self.max_retry_delay.map(Duration::from_secs)
+    }
+
+    pub(crate) fn min_retry_delay_duration(&self) -> Option<Duration> {
+        self.min_retry_delay.map(Duration::from_secs)
+    }
+
+    pub(crate) fn parse_proxies(&self) -> Result<Vec<url::Url>> {
+        self.proxies
+            .iter()
+            .map(|p| url::Url::parse(p).with_context(|| format!("Invalid proxy URL: {p}")))
+            .collect()
+    }
+}
+
+fn merge_config_with_args(args: &CliArgs) -> Result<Config> {
+    let mut base_config = Config::default();
+
+    if let Some(max_workers) = args.max_workers {
+        base_config.max_workers = max_workers;
+    }
+    if let Some(concurrency_budget) = args.concurrency_budget {
+        base_config.concurrency_budget = concurrency_budget;
+    }
+    if let Some(max_retries) = args.max_retries {
+        base_config.max_retries = max_retries;
+    }
+    if let Some(timeout) = args.timeout_duration() {
+        base_config.timeout = timeout;
+    }
+    if let Some(max_retry_delay) = args.max_retry_delay_duration() {
+        base_config.max_retry_delay = max_retry_delay;
+    }
+    if let Some(min_retry_delay) = args.min_retry_delay_duration() {
+        base_config.min_retry_delay = min_retry_delay;
+    }
+    if let Some(proxy_mode) = args.proxy_mode {
+        base_config.proxy_mode = proxy_mode;
+    }
+    if !args.proxies.is_empty() {
+        base_config.proxies = args.parse_proxies()?;
+    }
+
+    base_config.normalize();
+    base_config.validate().map_err(|msg| anyhow::anyhow!(msg))?;
+    Ok(base_config)
+}
+
+/// Run a simple CLI download given a MEGA URL.
+/// This uses the same worker pipeline as the GUI and shows a progress bar.
+pub(crate) async fn run_cli(args: CliArgs) -> Result<()> {
+    let config = merge_config_with_args(&args)?;
     let client = mega_builder(&config)?;
+    let url = args.url.clone();
 
     let (files, _) = get_files(client.clone(), url.clone(), 0)
         .await
@@ -136,6 +245,7 @@ pub(crate) async fn run_cli(url: String) -> Result<()> {
             RunnerMessage::Error(err) => {
                 pb.println(format!("Error: {err}"));
             }
+            #[cfg(feature = "gui")]
             RunnerMessage::Finished => {
                 break;
             }

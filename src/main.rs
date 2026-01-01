@@ -1,10 +1,13 @@
+#[cfg(feature = "gui")]
 use crate::app::build_app;
-use crate::cli::run_cli;
+use crate::cli::{CliArgs, run_cli};
 use crate::config::Config;
 use crate::mega_client::{MegaClient, Node, NodeKind};
+use clap::Parser;
 use log::{LevelFilter, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(feature = "gui")]
 use std::env;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -19,30 +22,37 @@ use tokio::time::{Instant, sleep};
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "gui")]
 mod app;
 mod cli;
+#[cfg(feature = "gui")]
 mod components;
 mod config;
 mod helpers;
+#[cfg(feature = "gui")]
 mod loading_wheel;
 mod mega_client;
+#[cfg(feature = "gui")]
 mod resources;
+#[cfg(feature = "gui")]
 mod screens;
+#[cfg(feature = "gui")]
 mod styles;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
 
-#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Eq)]
+#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Eq, clap::ValueEnum)]
 enum ProxyMode {
-    /// Use a random proxy from the list
-    Random,
-    /// Use a single proxy
-    Single,
     /// No proxy
     None,
+    /// Use a single proxy
+    Single,
+    /// Use a random proxy from the list
+    Random,
 }
 
 impl ProxyMode {
+    #[cfg(feature = "gui")]
     pub const ALL: [Self; 3] = [Self::None, Self::Single, Self::Random];
 }
 
@@ -139,6 +149,7 @@ impl Download {
         self.last_tried_at.lock().await.replace(Instant::now());
     }
 
+    #[cfg(feature = "gui")]
     fn progress(&self) -> f32 {
         if self.node.size == 0 {
             return 0.0;
@@ -146,6 +157,7 @@ impl Download {
         (self.downloaded.load(Ordering::Relaxed) as f32 / self.node.size as f32).clamp(0.0, 1.0)
     }
 
+    #[cfg(feature = "gui")]
     fn speed(&self) -> f32 {
         if self.paused.load(Ordering::Relaxed) {
             return 0_f32;
@@ -162,20 +174,24 @@ impl Download {
         }
     }
 
+    #[cfg(feature = "gui")]
     fn cancel(&self) {
         self.stop.cancel();
     }
 
+    #[cfg(feature = "gui")]
     fn pause(&self) {
         self.pause.notify_one();
     }
 
+    #[cfg(feature = "gui")]
     fn resume(&self) {
         self.paused.store(false, Ordering::Relaxed);
         // the worker will be sitting on notified
         self.pause.notify_one();
     }
 
+    #[cfg(feature = "gui")]
     fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
     }
@@ -190,6 +206,7 @@ enum RunnerMessage {
     /// notifies the UI when non-critical errors bubble up
     Error(String),
     /// may be emitted during shutdown
+    #[cfg(feature = "gui")]
     Finished,
 }
 
@@ -200,19 +217,22 @@ enum RetryDecision {
 }
 
 /// main entry point which runs the Iced UI
+#[cfg(feature = "gui")]
 fn main() -> iced::Result {
     simple_logging::log_to_file("giga-grabber.log", LevelFilter::Warn).unwrap();
     log_panics::init();
 
     let mut args = env::args();
     let _exe = args.next(); // skip program name
+    let has_cli_args = args.len() > 0;
 
-    if let Some(url) = args.next() {
-        // CLI mode: run downloads inside a Tokio runtime
+    if has_cli_args {
+        // CLI mode: parse args with clap, then run downloads inside a Tokio runtime
+        let cli = CliArgs::parse();
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
         rt.block_on(async move {
-            if let Err(err) = run_cli(url).await {
+            if let Err(err) = run_cli(cli).await {
                 error!("CLI error: {err:?}");
             }
         });
@@ -222,6 +242,22 @@ fn main() -> iced::Result {
         // No CLI args → launch GUI
         build_app().run()
     }
+}
+
+#[cfg(not(feature = "gui"))]
+fn main() {
+    simple_logging::log_to_file("giga-grabber.log", LevelFilter::Warn).unwrap();
+    log_panics::init();
+
+    // CLI-only build always runs in CLI mode
+    let cli = CliArgs::parse();
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+
+    rt.block_on(async move {
+        if let Err(err) = run_cli(cli).await {
+            error!("CLI error: {err:?}");
+        }
+    });
 }
 
 /// load the nodes of a mega folder producing an array of MegaFile

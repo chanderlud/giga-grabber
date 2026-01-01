@@ -1,18 +1,32 @@
+use crate::ProxyMode;
+#[cfg(feature = "gui")]
+use crate::RunnerMessage;
+#[cfg(feature = "gui")]
+use crate::WorkerHandle;
 use crate::config::Config;
 use crate::mega_client::MegaClient;
+#[cfg(feature = "gui")]
 use crate::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
-use crate::{ProxyMode, RunnerMessage, WorkerHandle};
+#[cfg(feature = "gui")]
 use iced::futures::Stream;
+#[cfg(feature = "gui")]
 use iced::futures::sink::SinkExt;
+#[cfg(feature = "gui")]
 use iced::widget::svg::{Status, Style};
+#[cfg(feature = "gui")]
 use iced::widget::{button, svg};
+#[cfg(feature = "gui")]
 use iced::{Element, Length, Theme, stream};
 use reqwest::{Client, Proxy};
+#[cfg(feature = "gui")]
 use std::collections::HashMap;
+#[cfg(feature = "gui")]
 use tokio::sync::mpsc::{Sender, channel};
+#[cfg(feature = "gui")]
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     /// force the GUI to update
@@ -37,6 +51,7 @@ pub(crate) enum Message {
     ClearFiles,
 }
 
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Route {
     Home,
@@ -45,12 +60,14 @@ pub(crate) enum Route {
     Settings,
 }
 
+#[cfg(feature = "gui")]
 #[derive(Default)]
 pub(crate) struct UrlInput {
     pub(crate) value: String,
     pub(crate) status: UrlStatus,
 }
 
+#[cfg(feature = "gui")]
 #[derive(PartialEq, Clone, Copy, Default)]
 pub(crate) enum UrlStatus {
     #[default]
@@ -61,12 +78,14 @@ pub(crate) enum UrlStatus {
 }
 
 /// a wrapper around HashMap that uses an incrementing index as the key
+#[cfg(feature = "gui")]
 pub(crate) struct IndexMap<T> {
     pub(crate) data: HashMap<usize, T>,
     unused_indices: Vec<usize>,
     next_index: usize,
 }
 
+#[cfg(feature = "gui")]
 impl<T: Default> Default for IndexMap<T> {
     fn default() -> Self {
         Self {
@@ -77,6 +96,7 @@ impl<T: Default> Default for IndexMap<T> {
     }
 }
 
+#[cfg(feature = "gui")]
 impl<T> IndexMap<T>
 where
     T: Default,
@@ -129,6 +149,7 @@ where
     }
 }
 
+#[cfg(feature = "gui")]
 pub(crate) struct WorkerState {
     pub(crate) handles: Vec<WorkerHandle>,
     pub(crate) cancel: CancellationToken,
@@ -163,6 +184,7 @@ pub(crate) fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
     MegaClient::new(http_client)
 }
 
+#[cfg(feature = "gui")]
 pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
     stream::channel(100, async |mut output| {
         // Create tokio channel for workers
@@ -193,6 +215,7 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
 }
 
 /// build an icon button
+#[cfg(feature = "gui")]
 pub(crate) fn icon_button<M: Clone + 'static>(
     icon: &'static [u8],
     message: M,
@@ -211,6 +234,7 @@ pub(crate) fn icon_button<M: Clone + 'static>(
 }
 
 /// pads a usize with spaces
+#[cfg(feature = "gui")]
 pub(crate) fn pad_usize(num: usize) -> String {
     let mut s = num.to_string();
 
@@ -222,6 +246,7 @@ pub(crate) fn pad_usize(num: usize) -> String {
 }
 
 /// rounds f32 & pads with spaces
+#[cfg(feature = "gui")]
 pub(crate) fn pad_f32(num: f32) -> String {
     let mut s = if num < 0.0001 {
         String::from("0")

@@ -1,4 +1,5 @@
 use crate::ProxyMode;
+#[cfg(feature = "gui")]
 use iced::Theme;
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -46,8 +47,11 @@ impl Display for Error {
     }
 }
 
+impl std::error::Error for Error {}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Config {
+    #[cfg(feature = "gui")]
     pub(crate) theme: String,
     pub(crate) max_workers: usize,
     pub(crate) concurrency_budget: usize,
@@ -63,6 +67,7 @@ pub(crate) struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "gui")]
             theme: "System".to_string(),
             max_workers: 10,
             concurrency_budget: 10,
@@ -161,6 +166,7 @@ impl Config {
         raw_weight.min(budget)
     }
 
+    #[cfg(feature = "gui")]
     pub(crate) fn get_theme(&self) -> Option<Theme> {
         Theme::ALL
             .iter()
