@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::helpers::*;
-use crate::mega_client::{MegaClient, NodeKind};
+use crate::mega_client::MegaClient;
 use crate::resources::*;
 use crate::screens::*;
 use crate::{Download, MegaFile, RunnerMessage, spawn_workers, styles};
@@ -10,7 +10,7 @@ use iced::font::{Family, Weight};
 use iced::time::every;
 use iced::widget::{Column, Row, space, svg};
 use iced::widget::{
-    button, center, checkbox, container, mouse_area, opaque, progress_bar, scrollable, stack, text,
+    button, center, container, mouse_area, opaque, progress_bar, scrollable, stack, text,
 };
 use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme};
 use log::error;
@@ -30,16 +30,14 @@ pub(crate) const MONOSPACE: Font = Font {
 pub(crate) struct App {
     settings: Settings,
     import: Import,
+    choose_files: Option<ChooseFiles>,
     mega: MegaClient,
     worker: Option<WorkerState>,
     active_downloads: HashMap<String, Download>,
     runner_sender: Option<TokioSender<RunnerMessage>>,
     download_sender: kanal::Sender<Download>,
     download_receiver: kanal::AsyncReceiver<Download>,
-    files: Vec<MegaFile>,
-    file_filter: HashMap<String, bool>,
     file_handles: HashSet<String>,
-    expanded_files: HashMap<String, bool>,
     route: Route,
     errors: Vec<String>,
     error_modal: Option<String>,
@@ -83,6 +81,7 @@ impl App {
                     Action::Run(task) => task.map(Message::Import),
                     Action::FilesLoaded(files) => {
                         // Filter duplicates using file_handles
+                        let mut accepted: Vec<MegaFile> = Vec::new();
                         for file in files {
                             let handles: Vec<String> =
                                 file.iter().map(|f| f.node.handle.clone()).collect();
@@ -92,7 +91,15 @@ impl App {
                                 for handle in &handles {
                                     self.file_handles.insert(handle.clone());
                                 }
-                                self.files.push(file);
+                                accepted.push(file);
+                            }
+                        }
+
+                        if !accepted.is_empty() {
+                            if let Some(choose_files) = &mut self.choose_files {
+                                choose_files.add_files(accepted);
+                            } else {
+                                self.choose_files = Some(ChooseFiles::new(accepted));
                             }
                         }
                         Task::none()
@@ -103,33 +110,38 @@ impl App {
                     }
                 }
             }
-            Message::AddFiles => {
-                // Collect handles from active downloads to prevent duplicates
-                let active_handles: HashSet<String> =
-                    self.active_downloads.keys().cloned().collect();
+            Message::ChooseFiles(msg) => {
+                use crate::screens::choose_files::Action;
 
-                // flatten file structure into a list of downloads
-                let downloads: Vec<Download> = self
-                    .files
-                    .iter()
-                    .flat_map(|file| file.iter())
-                    .filter(|f| f.node.kind == NodeKind::File)
-                    .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
-                    .filter(|f| !active_handles.contains(&f.node.handle))
-                    .map(Download::new)
-                    .collect();
-
-                // add downloads to queue
-                for download in downloads {
-                    self.download_sender.send(download).unwrap();
+                if let Some(choose_files) = &mut self.choose_files {
+                    let active_handles: HashSet<String> =
+                        self.active_downloads.keys().cloned().collect();
+                    match choose_files.update(msg, &active_handles) {
+                        Action::None => Task::none(),
+                        Action::QueueDownloads(downloads) => {
+                            // Queue downloads
+                            for download in downloads {
+                                self.download_sender.send(download).unwrap();
+                            }
+                            // Start workers if needed
+                            if self.worker.is_none() {
+                                self.worker =
+                                    Some(self.start_workers(self.settings.config.max_workers));
+                            }
+                            // Navigate to home
+                            self.route = Route::Home;
+                            // Clear the screen
+                            self.choose_files = None;
+                            Task::perform(async {}, |_| Message::ClearFiles)
+                        }
+                        Action::ClearFiles => {
+                            self.choose_files = None;
+                            Task::perform(async {}, |_| Message::ClearFiles)
+                        }
+                    }
+                } else {
+                    Task::none()
                 }
-
-                if self.worker.is_none() {
-                    self.worker = Some(self.start_workers(self.settings.config.max_workers));
-                }
-
-                self.route = Route::Home; // navigate to home
-                Task::perform(async {}, |_| Message::ClearFiles) // clear files
             }
             Message::RunnerReady(sender) => {
                 self.runner_sender = Some(sender);
@@ -168,34 +180,12 @@ impl App {
                     Route::Home | Route::Import | Route::Settings => self.route = route,
                     // only navigate to ChooseFiles if files are loaded
                     Route::ChooseFiles => {
-                        if self.files.is_empty() {
+                        if self.choose_files.is_none() {
                             self.error_modal = Some("No files imported".to_string())
                         } else {
                             self.route = route
                         }
                     }
-                }
-
-                Task::none()
-            }
-            Message::ToggleFile(item) => {
-                // insert an entry for the file in the filter
-                self.file_filter.insert(item.1.node.handle.clone(), item.0);
-
-                // all children of the file should have the same entry in the filter
-                item.1.iter().for_each(|file| {
-                    self.file_filter.insert(file.node.handle.clone(), item.0);
-                });
-
-                Task::none()
-            }
-            Message::ToggleExpanded(hash) => {
-                if let Some(expanded) = self.expanded_files.get_mut(&hash) {
-                    // toggle expanded state if it already exists
-                    *expanded = !*expanded;
-                } else {
-                    // insert expanded state if it doesn't exist
-                    self.expanded_files.insert(hash, true);
                 }
 
                 Task::none()
@@ -290,9 +280,8 @@ impl App {
                 }
             }
             Message::ClearFiles => {
-                self.files.clear(); // clear files
-                self.file_filter.clear(); // clear file filter
                 self.file_handles.clear(); // clear file handles tracking
+                self.choose_files = None;
 
                 // clear loaded URL inputs
                 self.import.clear_loaded_inputs();
@@ -476,62 +465,15 @@ impl App {
             }
             Route::Import => container(self.import.view().map(Message::Import)),
             Route::ChooseFiles => {
-                let mut column = Column::new().width(Length::Fill).spacing(5);
-
-                let size: u64 = self
-                    .files
-                    .iter()
-                    .flat_map(|file| file.iter())
-                    .filter(|f| f.node.kind == NodeKind::File)
-                    .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
-                    .map(|file| file.node.size)
-                    .sum();
-                let size_gb = size as f64 / 1024f64.powi(3);
-
-                for file in &self.files {
-                    column = column.push(self.recursive_files(file));
+                if let Some(choose_files) = &self.choose_files {
+                    container(
+                        choose_files
+                            .view(&self.settings.config.get_theme())
+                            .map(Message::ChooseFiles),
+                    )
+                } else {
+                    container(text("No files loaded"))
                 }
-
-                container(
-                    Column::new()
-                        .push(scrollable(column).width(Length::Fill).height(Length::Fill))
-                        .push(
-                            Row::new()
-                                .height(Length::Fixed(30_f32))
-                                .spacing(10)
-                                .push(
-                                    button(" Add to queue ")
-                                        .style(button::primary)
-                                        .on_press(Message::AddFiles),
-                                )
-                                .push(
-                                    button(" Cancel ")
-                                        .style(button::danger)
-                                        .on_press(Message::ClearFiles),
-                                )
-                                .push(
-                                    container(
-                                        text(format!(" {:.2} GB ", size_gb).replace('0', "O"))
-                                            .font(MONOSPACE)
-                                            .align_y(Vertical::Center)
-                                            .align_x(Horizontal::Center)
-                                            .width(Length::Fill)
-                                            .height(Length::Fill),
-                                    )
-                                    .style(|theme: &Theme| {
-                                        let palette = theme.extended_palette();
-                                        container::Style {
-                                            background: Some(
-                                                palette.background.strong.color.into(),
-                                            ),
-                                            border: Border::default().rounded(4.0),
-                                            ..Default::default()
-                                        }
-                                    })
-                                    .height(Length::Fill),
-                                ),
-                        ),
-                )
             }
             Route::Settings => container(self.settings.view().map(Message::Settings)),
         };
@@ -551,7 +493,7 @@ impl App {
                                 &nav_theme,
                                 "Choose files",
                                 Route::ChooseFiles,
-                                self.files.is_empty(),
+                                self.choose_files.is_none(),
                             ))
                             .push(space::vertical().height(Length::Fill))
                             .push(self.nav_button(&nav_theme, "Settings", Route::Settings, false)),
@@ -641,72 +583,6 @@ impl App {
 
         // run all subscriptions in parallel
         Subscription::batch(vec![runner_subscription, refresh])
-    }
-
-    fn recursive_files<'a>(&self, file: &'a MegaFile) -> Element<'a, Message> {
-        if file.children.is_empty() {
-            Row::new()
-                .spacing(5)
-                .push(
-                    text(&file.node.name)
-                        .width(Length::Fill)
-                        .align_y(Vertical::Center),
-                )
-                .push(
-                    checkbox(*self.file_filter.get(&file.node.handle).unwrap_or(&true))
-                        .on_toggle(|value| Message::ToggleFile(Box::new((value, file.clone()))))
-                        .style(checkbox::primary),
-                )
-                .into()
-        } else {
-            let expanded = *self.expanded_files.get(&file.node.handle).unwrap_or(&false);
-            let theme = self.settings.config.get_theme();
-            let palette = theme.extended_palette();
-            let color = Some(palette.primary.base.color);
-            let style = styles::svg::svg_icon_style(color);
-
-            let mut column = Column::new().spacing(5).push(
-                Row::new()
-                    .spacing(5)
-                    .push(
-                        button(
-                            svg(svg::Handle::from_memory(if expanded {
-                                COLLAPSE_ICON
-                            } else {
-                                EXPAND_ICON
-                            }))
-                            .height(Length::Fixed(16_f32))
-                            .width(Length::Fixed(16_f32))
-                            .style(style),
-                        )
-                        .style(button::background)
-                        .on_press(Message::ToggleExpanded(file.node.handle.clone()))
-                        .padding(3),
-                    )
-                    .push(
-                        text(&file.node.name)
-                            .width(Length::Fill)
-                            .align_y(Vertical::Center),
-                    )
-                    .push(
-                        checkbox(*self.file_filter.get(&file.node.handle).unwrap_or(&true))
-                            .on_toggle(|value| Message::ToggleFile(Box::new((value, file.clone()))))
-                            .style(checkbox::primary),
-                    ),
-            );
-
-            if expanded {
-                for file in &file.children {
-                    column = column.push(
-                        Row::new()
-                            .push(space::horizontal().width(Length::Fixed(20.0)))
-                            .push(self.recursive_files(file)),
-                    );
-                }
-            }
-
-            column.into()
-        }
     }
 
     fn nav_button<'a>(
@@ -837,16 +713,14 @@ impl From<Config> for App {
         Self {
             settings: Settings::new(config),
             import: Import::new(),
+            choose_files: None,
             mega,
             worker: None,
             active_downloads: HashMap::new(),
             runner_sender: None,
             download_sender,
             download_receiver: download_receiver.to_async(),
-            files: Vec::new(),
-            file_filter: HashMap::new(),
             file_handles: HashSet::new(),
-            expanded_files: HashMap::new(),
             route: Route::Home,
             errors: Vec::new(),
             error_modal: None,

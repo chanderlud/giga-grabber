@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::mega_client::MegaClient;
-use crate::screens::{ImportMessage, SettingsMessage};
-use crate::{MegaFile, ProxyMode, RunnerMessage, WorkerHandle};
+use crate::screens::{ChooseFilesMessage, ImportMessage, SettingsMessage};
+use crate::{ProxyMode, RunnerMessage, WorkerHandle};
 use iced::futures::Stream;
 use iced::futures::sink::SinkExt;
 use iced::widget::svg::{Status, Style};
@@ -19,18 +19,14 @@ pub(crate) enum Message {
     Refresh,
     /// import screen message
     Import(ImportMessage),
-    /// user added files to download queue
-    AddFiles,
+    /// choose files screen message
+    ChooseFiles(ChooseFilesMessage),
     /// received message from runner
     Runner(RunnerMessage),
     /// runner subscription is ready, provides sender for workers
     RunnerReady(Sender<RunnerMessage>),
     /// navigate to a different route
     Navigate(Route),
-    /// toggle file & children for download
-    ToggleFile(Box<(bool, MegaFile)>),
-    /// toggle expanded state of file tree
-    ToggleExpanded(String),
     /// close the error modal
     CloseModal,
     /// cancel all downloads
