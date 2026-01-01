@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::mega_client::MegaClient;
-use crate::screens::{ChooseFilesMessage, ImportMessage, SettingsMessage};
+use crate::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
 use crate::{ProxyMode, RunnerMessage, WorkerHandle};
 use iced::futures::Stream;
 use iced::futures::sink::SinkExt;
@@ -17,6 +17,8 @@ use url::Url;
 pub(crate) enum Message {
     /// force the GUI to update
     Refresh,
+    /// home screen message
+    Home(HomeMessage),
     /// import screen message
     Import(ImportMessage),
     /// choose files screen message
@@ -29,18 +31,6 @@ pub(crate) enum Message {
     Navigate(Route),
     /// close the error modal
     CloseModal,
-    /// cancel all downloads
-    CancelDownloads,
-    /// cancel download by id
-    CancelDownload(String),
-    /// pause all downloads
-    PauseDownloads,
-    /// pause download by id
-    PauseDownload(String),
-    /// resume all downloads
-    ResumeDownloads,
-    /// resume download by id
-    ResumeDownload(String),
     /// settings screen message
     Settings(SettingsMessage),
     /// remove any loaded files
@@ -207,11 +197,11 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
 }
 
 /// build an icon button
-pub(crate) fn icon_button(
+pub(crate) fn icon_button<M: Clone + 'static>(
     icon: &'static [u8],
-    message: Message,
+    message: M,
     style: impl Fn(&Theme, Status) -> Style + 'static,
-) -> Element<'static, Message> {
+) -> Element<'static, M> {
     button(
         svg(svg::Handle::from_memory(icon))
             .height(Length::Fixed(25_f32))

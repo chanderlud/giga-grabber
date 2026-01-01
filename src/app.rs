@@ -5,18 +5,18 @@ use crate::resources::*;
 use crate::screens::*;
 use crate::{Download, MegaFile, RunnerMessage, spawn_workers, styles};
 use futures::future::join_all;
+use futures::FutureExt;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::time::every;
 use iced::widget::{Column, Row, space, svg};
 use iced::widget::{
-    button, center, container, mouse_area, opaque, progress_bar, scrollable, stack, text,
+    button, center, container, mouse_area, opaque, stack, text,
 };
-use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme};
+use iced::{Alignment, Color, Element, Font, Length, Subscription, Task, Theme};
 use log::error;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
@@ -31,18 +31,15 @@ pub(crate) struct App {
     settings: Settings,
     import: Import,
     choose_files: Option<ChooseFiles>,
+    home: Home,
     mega: MegaClient,
     worker: Option<WorkerState>,
-    active_downloads: HashMap<String, Download>,
     runner_sender: Option<TokioSender<RunnerMessage>>,
     download_sender: kanal::Sender<Download>,
     download_receiver: kanal::AsyncReceiver<Download>,
     file_handles: HashSet<String>,
     route: Route,
-    errors: Vec<String>,
     error_modal: Option<String>,
-    all_paused: bool,
-    bandwidth_counter: usize,
 }
 
 impl App {
@@ -59,8 +56,9 @@ impl App {
             title.push_str(" - downloads active");
         }
 
-        if !self.active_downloads.is_empty() {
-            title.push_str(&format!(" - {} running", self.active_downloads.len()));
+        if !self.home.has_active_downloads() {
+        } else {
+            title.push_str(&format!(" - {} running", self.home.active_downloads().len()));
         }
 
         let queued = self.download_receiver.len();
@@ -74,6 +72,18 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Refresh => Task::none(),
+            Message::Home(msg) => {
+                use crate::screens::home::Action;
+                match self.home.update(msg) {
+                    Action::None => Task::none(),
+                    Action::StopWorkers => {
+                        // Cancel queued downloads so they don't auto-start if workers restart.
+                        self.drain_download_queue();
+                        self.stop_workers();
+                        Task::none()
+                    }
+                }
+            }
             Message::Import(msg) => {
                 use crate::screens::import::Action;
                 match self.import.update(msg, &self.mega) {
@@ -115,7 +125,7 @@ impl App {
 
                 if let Some(choose_files) = &mut self.choose_files {
                     let active_handles: HashSet<String> =
-                        self.active_downloads.keys().cloned().collect();
+                        self.home.active_downloads().keys().cloned().collect();
                     match choose_files.update(msg, &active_handles) {
                         Action::None => Task::none(),
                         Action::QueueDownloads(downloads) => {
@@ -151,24 +161,18 @@ impl App {
                 match message {
                     RunnerMessage::Active(download) => {
                         // add download to active downloads
-                        self.active_downloads
-                            .insert(download.node.handle.clone(), download);
+                        self.home.add_active_download(download);
                     }
                     RunnerMessage::Inactive(id) => {
-                        // add downloaded bytes to bandwidth counter
-                        if let Some(download) = self.active_downloads.get(&id) {
-                            self.bandwidth_counter += download.downloaded.load(Relaxed);
-                        }
-
-                        self.active_downloads.remove(&id); // remove download from active downloads
+                        self.home.remove_active_download(&id);
 
                         // if there are no active downloads, stop the runner
-                        if self.active_downloads.is_empty() && self.download_receiver.is_empty() {
+                        if !self.home.has_active_downloads() && self.download_receiver.is_empty() {
                             self.stop_workers();
                         }
                     }
                     RunnerMessage::Error(error) => {
-                        self.errors.push(error);
+                        self.home.add_error(error);
                     }
                     RunnerMessage::Finished => (),
                 }
@@ -192,53 +196,6 @@ impl App {
             }
             Message::CloseModal => {
                 self.error_modal = None;
-                Task::none()
-            }
-            Message::CancelDownloads => {
-                // stop the workers
-                self.stop_workers();
-                // clear the queue
-                while let Ok(Some(download)) = self.download_receiver.try_recv() {
-                    download.cancel();
-                }
-                // cancel all active downloads
-                for (_, download) in self.active_downloads.drain() {
-                    download.cancel();
-                }
-                Task::none()
-            }
-            Message::CancelDownload(id) => {
-                if let Some(download) = self.active_downloads.get(&id) {
-                    download.cancel();
-                }
-                Task::none()
-            }
-            Message::PauseDownloads => {
-                self.all_paused = true; // set all paused flag for UI purposes
-                // pause each active download
-                for (_, download) in self.active_downloads.iter() {
-                    download.pause();
-                }
-                Task::none()
-            }
-            Message::PauseDownload(id) => {
-                if let Some(download) = self.active_downloads.get(&id) {
-                    download.pause();
-                }
-                Task::none()
-            }
-            Message::ResumeDownloads => {
-                self.all_paused = false;
-                for (_, download) in self.active_downloads.iter() {
-                    download.resume();
-                }
-                Task::none()
-            }
-            Message::ResumeDownload(id) => {
-                self.all_paused = false; // all downloads can't be paused if we're resuming one
-                if let Some(download) = self.active_downloads.get(&id) {
-                    download.resume();
-                }
                 Task::none()
             }
             Message::Settings(msg) => {
@@ -300,167 +257,10 @@ impl App {
         // build content
         let content = match self.route {
             Route::Home => {
-                let theme = self.settings.config.get_theme();
-                let palette = theme.extended_palette();
-                let icon_color = Some(palette.primary.base.color);
-                let mut download_list = Column::new();
-
-                for (index, (id, download)) in self.active_downloads.iter().enumerate() {
-                    let mut progress = download.progress();
-
-                    if progress < 0.1 && progress > 0_f32 {
-                        progress = 0.1;
-                    }
-
-                    let icon_style_pause = styles::svg::svg_icon_style(icon_color);
-                    let pause_button = if download.is_paused() {
-                        icon_button(
-                            PLAY_ICON,
-                            Message::ResumeDownload(id.clone()),
-                            icon_style_pause,
-                        )
-                    } else {
-                        icon_button(
-                            PAUSE_ICON,
-                            Message::PauseDownload(id.clone()),
-                            icon_style_pause,
-                        )
-                    };
-
-                    let icon_style_x = styles::svg::svg_icon_style(icon_color);
-                    download_list = download_list.push(
-                        container(
-                            Row::new()
-                                .height(Length::Fixed(35_f32))
-                                .width(Length::Fill)
-                                .align_y(Alignment::Center)
-                                .push(space::horizontal().width(Length::Fixed(7_f32)))
-                                .push(
-                                    text(&download.node.name)
-                                        .width(Length::Fill)
-                                        .height(Length::Fill)
-                                        .align_y(Vertical::Center),
-                                )
-                                .push(space::horizontal().width(Length::Fixed(3_f32)))
-                                .push(
-                                    progress_bar(0_f32..=1_f32, progress)
-                                        .style(styles::progress_bar::custom_style)
-                                        .length(Length::Fixed(80_f32))
-                                        .girth(Length::Fixed(15_f32)),
-                                )
-                                .push(space::horizontal().width(Length::Fixed(10_f32)))
-                                .push(
-                                    text(
-                                        format!("{} MB/s", pad_f32(download.speed()))
-                                            .replace('0', "O"),
-                                    )
-                                    .width(Length::Shrink)
-                                    .height(Length::Fill)
-                                    .align_y(Vertical::Center)
-                                    .font(MONOSPACE)
-                                    .size(16),
-                                )
-                                .push(space::horizontal().width(Length::Fixed(5_f32)))
-                                .push(icon_button(
-                                    X_ICON,
-                                    Message::CancelDownload(id.clone()),
-                                    icon_style_x,
-                                ))
-                                .push(pause_button)
-                                .push(space::horizontal().width(Length::Fixed(7_f32))),
-                        )
-                        .style(styles::container::download_style(index)),
-                    );
-                }
-
-                if self.active_downloads.is_empty() {
-                    download_list = download_list.push(
-                        text("No active downloads")
-                            .height(Length::Fixed(30_f32))
-                            .width(Length::Fixed(165_f32))
-                            .align_y(Vertical::Center)
-                            .align_x(Horizontal::Center),
-                    )
-                }
-
-                let mut download_group = Column::new().push(
-                    scrollable(download_list)
-                        // .(Properties::default().width(5).scroller_width(5).margin(0))
-                        .height(Length::Fill),
-                );
-
-                if !self.active_downloads.is_empty() {
-                    let bandwidth_gb = self.bandwidth_counter as f64 / 1024f64.powi(3);
-                    download_group = download_group.push(
-                        Row::new()
-                            .spacing(10)
-                            .padding(8)
-                            .height(Length::Fixed(45_f32))
-                            .push(if self.all_paused {
-                                button(" Resume All ")
-                                    .on_press(Message::ResumeDownloads)
-                                    .style(button::danger)
-                            } else {
-                                button(" Pause All ")
-                                    .on_press(Message::PauseDownloads)
-                                    .style(button::danger)
-                            })
-                            .push(
-                                button(" Cancel All ")
-                                    .on_press(Message::CancelDownloads)
-                                    .style(button::warning),
-                            )
-                            .push(
-                                container(
-                                    text(format!(" {bandwidth_gb:.2} GB used ").replace('0', "O"))
-                                        .font(MONOSPACE)
-                                        .align_y(Vertical::Center)
-                                        .height(Length::Fill),
-                                )
-                                .style(|theme: &Theme| {
-                                    let palette = theme.extended_palette();
-                                    container::Style {
-                                        background: Some(palette.background.strong.color.into()),
-                                        border: Border::default().rounded(4.0),
-                                        ..Default::default()
-                                    }
-                                })
-                                .height(Length::Fill),
-                            ),
-                    )
-                }
-
-                let mut error_log = Column::new().push(scrollable(self.error_log()));
-
-                if self.errors.is_empty() {
-                    error_log = error_log.push(
-                        text("No errors")
-                            .height(Length::Fixed(30_f32))
-                            .width(Length::Fixed(70_f32))
-                            .align_y(Vertical::Center)
-                            .align_x(Horizontal::Center),
-                    )
-                }
-
                 container(
-                    Column::new()
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .spacing(5)
-                        .push(
-                            container(download_group)
-                                .style(container::bordered_box)
-                                .padding(2)
-                                .width(Length::Fill)
-                                .height(Length::FillPortion(2)),
-                        )
-                        .push(
-                            container(error_log)
-                                .style(container::bordered_box)
-                                .padding(8)
-                                .width(Length::Fill)
-                                .height(Length::FillPortion(1)),
-                        ),
+                    self.home
+                        .view(&self.settings.config.get_theme())
+                        .map(Message::Home),
                 )
             }
             Route::Import => container(self.import.view().map(Message::Import)),
@@ -653,18 +453,6 @@ impl App {
         button.into()
     }
 
-    fn error_log(&self) -> Element<'_, Message> {
-        let theme = self.settings.config.get_theme();
-        let error_color = theme.extended_palette().danger.strong.color;
-        let mut column = Column::new().spacing(2).width(Length::Fill);
-
-        for error in &self.errors {
-            column = column.push(text(error).color(error_color));
-        }
-
-        column.into()
-    }
-
     fn start_workers(&self, workers: usize) -> WorkerState {
         let cancel = CancellationToken::new();
         let runner_sender = self
@@ -701,6 +489,20 @@ impl App {
             });
         }
     }
+
+    fn drain_download_queue(&mut self) {
+        loop {
+            match self.download_receiver.recv().now_or_never() {
+                Some(Ok(download)) => {
+                    download.cancel();
+                }
+                // channel closed
+                Some(Err(_)) => break,
+                // nothing currently queued
+                None => break,
+            }
+        }
+    }
 }
 
 impl From<Config> for App {
@@ -714,18 +516,15 @@ impl From<Config> for App {
             settings: Settings::new(config),
             import: Import::new(),
             choose_files: None,
+            home: Home::new(),
             mega,
             worker: None,
-            active_downloads: HashMap::new(),
             runner_sender: None,
             download_sender,
             download_receiver: download_receiver.to_async(),
             file_handles: HashSet::new(),
             route: Route::Home,
-            errors: Vec::new(),
             error_modal: None,
-            all_paused: false,
-            bandwidth_counter: 0,
         }
     }
 }
