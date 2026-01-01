@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 mod app;
 mod cli;
+mod components;
 mod config;
 mod helpers;
 mod loading_wheel;

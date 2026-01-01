@@ -1,19 +1,15 @@
+use crate::components::{error_modal, nav_sidebar};
 use crate::config::Config;
 use crate::helpers::*;
 use crate::mega_client::MegaClient;
 use crate::resources::*;
 use crate::screens::*;
-use crate::{Download, MegaFile, RunnerMessage, spawn_workers, styles};
+use crate::{Download, MegaFile, RunnerMessage, spawn_workers};
 use futures::future::join_all;
-use futures::FutureExt;
-use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::time::every;
-use iced::widget::{Column, Row, space, svg};
-use iced::widget::{
-    button, center, container, mouse_area, opaque, stack, text,
-};
-use iced::{Alignment, Color, Element, Font, Length, Subscription, Task, Theme};
+use iced::widget::{Row, container, text};
+use iced::{Element, Font, Length, Subscription, Task, Theme};
 use log::error;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -58,7 +54,10 @@ impl App {
 
         if !self.home.has_active_downloads() {
         } else {
-            title.push_str(&format!(" - {} running", self.home.active_downloads().len()));
+            title.push_str(&format!(
+                " - {} running",
+                self.home.active_downloads().len()
+            ));
         }
 
         let queued = self.download_receiver.len();
@@ -256,13 +255,11 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         // build content
         let content = match self.route {
-            Route::Home => {
-                container(
-                    self.home
-                        .view(&self.settings.config.get_theme())
-                        .map(Message::Home),
-                )
-            }
+            Route::Home => container(
+                self.home
+                    .view(&self.settings.config.get_theme())
+                    .map(Message::Home),
+            ),
             Route::Import => container(self.import.view().map(Message::Import)),
             Route::ChooseFiles => {
                 if let Some(choose_files) = &self.choose_files {
@@ -280,89 +277,33 @@ impl App {
 
         // nav + content = body
         let nav_theme = self.settings.config.get_theme();
-        let body = container(
-            Row::new()
-                .push(
-                    container(
-                        Column::new()
-                            .padding(4)
-                            .spacing(4)
-                            .push(self.nav_button(&nav_theme, "Home", Route::Home, false))
-                            .push(self.nav_button(&nav_theme, "Import", Route::Import, false))
-                            .push(self.nav_button(
-                                &nav_theme,
-                                "Choose files",
-                                Route::ChooseFiles,
-                                self.choose_files.is_none(),
-                            ))
-                            .push(space::vertical().height(Length::Fill))
-                            .push(self.nav_button(&nav_theme, "Settings", Route::Settings, false)),
+        let mut body = Some(
+            container(
+                Row::new()
+                    .push(
+                        nav_sidebar::nav_sidebar(
+                            &self.route,
+                            &nav_theme,
+                            self.choose_files.is_none(),
+                        )
+                        .map(Message::Navigate),
                     )
-                    .width(Length::Fixed(170_f32))
-                    .height(Length::Fill)
-                    .style(|theme: &Theme| {
-                        let palette = theme.extended_palette();
-                        container::Style {
-                            background: Some(palette.background.strong.color.into()),
-                            ..Default::default()
-                        }
-                    }),
-                )
-                .push(content.padding(10).width(Length::Fill)),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill);
+                    .push(content.padding(10).width(Length::Fill)),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        );
 
         if let Some(error_message) = &self.error_modal {
-            let theme = self.settings.config.get_theme();
-            let error_color = theme.extended_palette().danger.strong.color;
-            stack![
-                body,
-                opaque(
-                    mouse_area(
-                        center(opaque(
-                            container(
-                                Column::new()
-                                    .spacing(5)
-                                    .push(
-                                        text(error_message)
-                                            .color(error_color)
-                                            .align_y(Vertical::Center)
-                                            .align_x(Horizontal::Center),
-                                    )
-                                    .push(space::horizontal().width(Length::Fixed(100_f32)))
-                                    .push(
-                                        Row::new()
-                                            .spacing(5)
-                                            .push(space::horizontal().width(Length::FillPortion(3)))
-                                            .push(
-                                                button(" Ok ")
-                                                    .style(button::primary)
-                                                    .on_press(Message::CloseModal),
-                                            ),
-                                    ),
-                            )
-                            .width(Length::Fixed(150_f32))
-                            .padding(10)
-                            .style(container::rounded_box)
-                        ))
-                        .style(|_theme| container::Style {
-                            background: Some(
-                                Color {
-                                    a: 0.5,
-                                    ..Color::BLACK
-                                }
-                                .into(),
-                            ),
-                            ..container::Style::default()
-                        })
-                    )
-                    .on_press(Message::CloseModal)
-                )
-            ]
-            .into()
+            error_modal::error_modal(
+                error_message,
+                &self.settings.config.get_theme(),
+                body.take().expect("body must be set"),
+            )
+            .map(|_| Message::CloseModal)
         } else {
-            body.into()
+            body.take().expect("body must be set")
         }
     }
 
@@ -383,74 +324,6 @@ impl App {
 
         // run all subscriptions in parallel
         Subscription::batch(vec![runner_subscription, refresh])
-    }
-
-    fn nav_button<'a>(
-        &self,
-        theme: &Theme,
-        label: &'a str,
-        route: Route,
-        disabled: bool,
-    ) -> Element<'a, Message> {
-        let palette = theme.extended_palette();
-        let color = if disabled {
-            Some(palette.secondary.weak.color)
-        } else {
-            Some(palette.primary.strong.color)
-        };
-
-        let mut row = Row::new()
-            .align_y(Alignment::Center)
-            .height(Length::Fixed(40_f32));
-
-        if self.route == route {
-            let style = styles::svg::svg_icon_style(color);
-            row = row
-                .push(
-                    svg(svg::Handle::from_memory(SELECTED_ICON))
-                        .style(style)
-                        .width(Length::Fixed(4_f32))
-                        .height(Length::Fixed(25_f32)),
-                )
-                .push(space::horizontal().width(Length::Fixed(8_f32)))
-        } else {
-            row = row.push(space::horizontal().width(Length::Fixed(12_f32)))
-        }
-
-        let handle = match route {
-            Route::Home => svg::Handle::from_memory(HOME_ICON),
-            Route::Import => svg::Handle::from_memory(IMPORT_ICON),
-            Route::ChooseFiles => svg::Handle::from_memory(CHOOSE_ICON),
-            Route::Settings => svg::Handle::from_memory(SETTINGS_ICON),
-        };
-
-        let svg_style = styles::svg::svg_icon_style(color);
-        row = row
-            .push(
-                container(
-                    svg(handle)
-                        .width(Length::Fixed(28_f32))
-                        .height(Length::Fixed(28_f32))
-                        .style(svg_style),
-                )
-                .padding(4)
-                .style({
-                    let is_active = self.route == route;
-                    styles::container::icon_style(is_active)
-                }),
-            )
-            .push(space::horizontal().width(Length::Fixed(12_f32)));
-
-        let mut button = button(row.push(text(label)))
-            .style(styles::button::nav_style(self.route == route))
-            .width(Length::Fill)
-            .padding(0);
-
-        if !disabled {
-            button = button.on_press(Message::Navigate(route));
-        }
-
-        button.into()
     }
 
     fn start_workers(&self, workers: usize) -> WorkerState {
@@ -492,14 +365,14 @@ impl App {
 
     fn drain_download_queue(&mut self) {
         loop {
-            match self.download_receiver.recv().now_or_never() {
-                Some(Ok(download)) => {
+            match self.download_receiver.try_recv() {
+                Ok(Some(download)) => {
                     download.cancel();
                 }
                 // channel closed
-                Some(Err(_)) => break,
+                Err(_) => break,
                 // nothing currently queued
-                None => break,
+                Ok(None) => break,
             }
         }
     }
