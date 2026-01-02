@@ -172,17 +172,17 @@ impl Import {
                         .spacing(10)
                         .push(
                             button(" Add from clipboard ")
-                                .style(button::primary)
+                                .style(styles::button::primary)
                                 .on_press(Message::AddUrlClipboard),
                         )
                         .push(
                             button(" + ")
-                                .style(button::primary)
+                                .style(styles::button::primary)
                                 .on_press(Message::AddInput),
                         )
                         .push(
                             button(" Load all ")
-                                .style(button::primary)
+                                .style(styles::button::primary)
                                 .on_press(Message::AddAllUrls),
                         ),
                 ),
@@ -216,9 +216,10 @@ impl Import {
                         button(
                             svg(svg::Handle::from_memory(TRASH_ICON))
                                 .width(Length::Fixed(22_f32))
-                                .height(Length::Fixed(22_f32)),
+                                .height(Length::Fixed(22_f32))
+                                .style(styles::svg::danger_svg),
                         )
-                        .style(button::background)
+                        .style(styles::button::icon)
                         .on_press(Message::RemoveInput(*index))
                         .padding(4),
                     );

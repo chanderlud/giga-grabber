@@ -113,12 +113,12 @@ impl ChooseFiles {
                         .spacing(10)
                         .push(
                             button(" Add to queue ")
-                                .style(button::primary)
+                                .style(styles::button::primary)
                                 .on_press(Message::AddFiles),
                         )
                         .push(
                             button(" Cancel ")
-                                .style(button::danger)
+                                .style(styles::button::warning)
                                 .on_press(Message::ClearFiles),
                         )
                         .push(
@@ -177,7 +177,7 @@ impl ChooseFiles {
                             .width(Length::Fixed(16_f32))
                             .style(styles::svg::primary_svg),
                         )
-                        .style(button::background)
+                        .style(styles::button::icon)
                         .on_press(Message::ToggleExpanded(file.node.handle.clone()))
                         .padding(3),
                     )

@@ -210,7 +210,7 @@ impl Settings {
     }
 
     pub(crate) fn view(&self) -> Element<'_, Message> {
-        let mut apply_button = button(" Apply ").style(button::primary);
+        let mut apply_button = button(" Apply ").style(styles::button::primary);
 
         if self.rebuild_available {
             apply_button = apply_button.on_press(Message::RebuildMega);
@@ -268,7 +268,8 @@ impl Settings {
                                 Some(self.config.theme.clone()),
                                 Message::ThemeChanged,
                             )
-                            .width(Length::Fixed(170_f32)),
+                            .width(Length::Fixed(170_f32))
+                            .style(styles::pick_list::default),
                         ),
                 )
                 .push(space::vertical().height(Length::Fixed(10_f32)))
@@ -286,7 +287,7 @@ impl Settings {
                         .push(space::horizontal().width(Length::Fixed(8_f32)))
                         .push(
                             button(" Save ")
-                                .style(button::primary)
+                                .style(styles::button::primary)
                                 .on_press(Message::SaveConfig),
                         )
                         .push(space::horizontal().width(Length::Fixed(10_f32)))
@@ -294,7 +295,7 @@ impl Settings {
                         .push(space::horizontal().width(Length::Fixed(10_f32)))
                         .push(
                             button(" Reset ")
-                                .style(button::warning)
+                                .style(styles::button::warning)
                                 .on_press(Message::ResetConfig),
                         ),
                 ),
@@ -349,7 +350,11 @@ impl Settings {
             .push(space::horizontal().width(Length::Fixed(8_f32)))
             .push(text(label).align_y(Vertical::Center).height(Length::Fill))
             .push(space::horizontal())
-            .push(pick_list(options, selected, message).width(Length::Fixed(170_f32)))
+            .push(
+                pick_list(options, selected, message)
+                    .width(Length::Fixed(170_f32))
+                    .style(styles::pick_list::default),
+            )
             .into()
     }
 
@@ -372,7 +377,7 @@ impl Settings {
                                         .width(Length::Fixed(15_f32))
                                         .height(Length::Fixed(15_f32)),
                                 )
-                                .style(button::background)
+                                .style(styles::button::icon)
                                 .on_press(Message::RemoveProxy(index))
                                 .padding(4),
                             )
@@ -402,7 +407,7 @@ impl Settings {
                             container(
                                 button(" Add proxies ")
                                     .on_press(Message::AddProxies)
-                                    .style(button::danger)
+                                    .style(styles::button::primary)
                                     .padding(4),
                             )
                             .padding(5),

@@ -1,4 +1,3 @@
-use crate::ProxyMode;
 #[cfg(feature = "gui")]
 use crate::RunnerMessage;
 #[cfg(feature = "gui")]
@@ -7,6 +6,7 @@ use crate::config::Config;
 use crate::mega_client::MegaClient;
 #[cfg(feature = "gui")]
 use crate::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
+use crate::{ProxyMode, styles};
 #[cfg(feature = "gui")]
 use iced::futures::Stream;
 #[cfg(feature = "gui")]
@@ -228,7 +228,7 @@ pub(crate) fn icon_button<M: Clone + 'static>(
             .style(style),
     )
     .padding(4)
-    .style(button::background)
+    .style(styles::button::icon)
     .on_press(message)
     .into()
 }

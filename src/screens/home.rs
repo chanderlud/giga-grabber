@@ -1,6 +1,6 @@
-use crate::Download;
 use crate::app::MONOSPACE;
 use crate::components::download_item;
+use crate::{Download, styles};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Column, Row, button, container, scrollable, text};
 use iced::{Border, Element, Length, Theme};
@@ -146,16 +146,16 @@ impl Home {
                     .push(if self.all_paused {
                         button(" Resume All ")
                             .on_press(Message::ResumeDownloads)
-                            .style(button::danger)
+                            .style(styles::button::primary)
                     } else {
                         button(" Pause All ")
                             .on_press(Message::PauseDownloads)
-                            .style(button::danger)
+                            .style(styles::button::primary)
                     })
                     .push(
                         button(" Cancel All ")
                             .on_press(Message::CancelDownloads)
-                            .style(button::warning),
+                            .style(styles::button::warning),
                     )
                     .push(
                         container(

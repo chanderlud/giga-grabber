@@ -7,6 +7,6 @@ pub(crate) fn custom_style(theme: &Theme) -> progress_bar::Style {
     progress_bar::Style {
         background: palette.background.weak.color.into(),
         bar: palette.primary.strong.color.into(),
-        border: Border::default(),
+        border: Border::default().rounded(4),
     }
 }

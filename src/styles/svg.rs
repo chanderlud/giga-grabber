@@ -20,3 +20,10 @@ pub(crate) fn primary_svg(theme: &Theme, _status: Status) -> Style {
         color: Some(palette.primary.base.color),
     }
 }
+
+pub(crate) fn danger_svg(theme: &Theme, _status: Status) -> Style {
+    let palette = theme.extended_palette();
+    Style {
+        color: Some(palette.danger.strong.color),
+    }
+}

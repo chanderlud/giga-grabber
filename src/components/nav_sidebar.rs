@@ -88,7 +88,7 @@ pub(crate) fn nav_button<'a>(
         .push(space::horizontal().width(Length::Fixed(12_f32)));
 
     let mut b = button(row.push(text(label)))
-        .style(styles::button::nav_style(current_route == &route))
+        .style(styles::button::navigation(current_route == &route))
         .width(Length::Fill)
         .padding(0);
 
