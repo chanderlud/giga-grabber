@@ -1,6 +1,12 @@
 use crate::ProxyMode;
 #[cfg(feature = "gui")]
 use iced::Theme;
+#[cfg(feature = "gui")]
+use iced::theme::Palette;
+#[cfg(feature = "gui")]
+use iced::theme::palette::*;
+#[cfg(feature = "gui")]
+use iced::{Color, color};
 use log::error;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -8,6 +14,8 @@ use std::fs::File;
 use std::io;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "gui")]
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -168,11 +176,139 @@ impl Config {
 
     #[cfg(feature = "gui")]
     pub(crate) fn get_theme(&self) -> Option<Theme> {
-        Theme::ALL
-            .iter()
-            .find(|t| t.to_string() == self.theme)
-            .cloned()
+        use iced::theme::Base;
+
+        if self.theme == "Vanilla" {
+            static VANILLA_THEME: OnceLock<Theme> = OnceLock::new();
+            return Some(VANILLA_THEME.get_or_init(build_vanilla_theme).clone());
+        }
+
+        Theme::ALL.iter().find(|t| t.name() == self.theme).cloned()
     }
+}
+
+#[cfg(feature = "gui")]
+fn build_vanilla_theme() -> Theme {
+    Theme::custom_with_fn(
+        "Vanilla",
+        Palette {
+            background: color!(3, 8, 28),
+            text: Color::WHITE,
+            // Ensure built-in Iced styles (e.g. `button::primary`, `button::warning`)
+            // match the old UI colors.
+            primary: color!(255, 48, 78),
+            success: color!(0, 200, 100),
+            warning: color!(255, 191, 83),
+            danger: color!(255, 69, 0),
+        },
+        |_palette| Extended {
+            background: Background {
+                base: Pair {
+                    color: color!(3, 8, 28),
+                    text: Color::WHITE,
+                },
+                weakest: Pair {
+                    color: color!(42, 42, 42),
+                    text: Color::WHITE,
+                },
+                weaker: Pair {
+                    color: color!(30, 30, 46),
+                    text: Color::WHITE,
+                },
+                weak: Pair {
+                    color: color!(50, 50, 66),
+                    text: Color::WHITE,
+                },
+                neutral: Pair {
+                    color: color!(46, 46, 46),
+                    text: Color::WHITE,
+                },
+                strong: Pair {
+                    color: color!(40, 40, 56),
+                    text: Color::WHITE,
+                },
+                stronger: Pair {
+                    color: color!(20, 20, 36),
+                    text: Color::WHITE,
+                },
+                strongest: Pair {
+                    color: color!(70, 70, 86),
+                    text: Color::WHITE,
+                },
+            },
+            primary: Primary {
+                base: Pair {
+                    color: color!(255, 68, 98),
+                    text: Color::WHITE,
+                },
+                weak: Pair {
+                    color: color!(0, 120, 212),
+                    text: Color::WHITE,
+                },
+                strong: Pair {
+                    color: color!(255, 48, 78),
+                    text: Color::WHITE,
+                },
+            },
+            secondary: Secondary {
+                base: Pair {
+                    color: color!(210, 210, 210),
+                    text: color!(3, 8, 28),
+                },
+                weak: Pair {
+                    color: color!(180, 180, 180),
+                    text: color!(3, 8, 28),
+                },
+                strong: Pair {
+                    color: color!(227, 227, 227),
+                    text: color!(3, 8, 28),
+                },
+            },
+            success: Success {
+                base: Pair {
+                    color: color!(0, 200, 100),
+                    text: Color::WHITE,
+                },
+                weak: Pair {
+                    color: color!(0, 180, 90),
+                    text: Color::WHITE,
+                },
+                strong: Pair {
+                    color: color!(0, 220, 110),
+                    text: Color::WHITE,
+                },
+            },
+            warning: Warning {
+                base: Pair {
+                    color: color!(255, 191, 83),
+                    text: color!(3, 8, 28),
+                },
+                weak: Pair {
+                    color: color!(255, 191, 83),
+                    text: color!(3, 8, 28),
+                },
+                strong: Pair {
+                    color: color!(255, 201, 103),
+                    text: color!(3, 8, 28),
+                },
+            },
+            danger: Danger {
+                base: Pair {
+                    color: color!(255, 69, 0),
+                    text: Color::WHITE,
+                },
+                weak: Pair {
+                    color: color!(255, 69, 0),
+                    text: Color::WHITE,
+                },
+                strong: Pair {
+                    color: color!(255, 69, 0),
+                    text: Color::WHITE,
+                },
+            },
+            is_dark: true,
+        },
+    )
 }
 
 fn config_backup_path() -> PathBuf {

@@ -5,11 +5,12 @@ use iced::{Border, Color, Theme, border};
 pub(crate) fn navigation(active: bool) -> impl Fn(&Theme, Status) -> Style {
     move |theme: &Theme, status: Status| {
         let palette = theme.extended_palette();
+        let is_vanilla = crate::styles::is_vanilla(theme);
 
         match status {
             Status::Active => Style {
                 background: Some(if active {
-                    palette.background.strong.color.into()
+                    palette.background.strongest.color.into()
                 } else {
                     Color::TRANSPARENT.into()
                 }),
@@ -23,9 +24,14 @@ pub(crate) fn navigation(active: bool) -> impl Fn(&Theme, Status) -> Style {
             },
             Status::Hovered | Status::Pressed => Style {
                 background: Some(if active {
-                    palette.background.strong.color.into()
+                    palette.background.strongest.color.into()
                 } else {
-                    palette.background.stronger.color.into()
+                    (if is_vanilla {
+                        palette.background.strong.color
+                    } else {
+                        palette.background.stronger.color
+                    })
+                    .into()
                 }),
                 border: Border {
                     radius: border::radius(4.0),

@@ -32,8 +32,16 @@ pub(crate) fn nav_sidebar(
     .height(Length::Fill)
     .style(|theme: &Theme| {
         let palette = theme.extended_palette();
+        let is_vanilla = styles::is_vanilla(theme);
         container::Style {
-            background: Some(palette.background.strong.color.into()),
+            background: Some(
+                if is_vanilla {
+                    palette.background.weak.color
+                } else {
+                    palette.background.strong.color
+                }
+                .into(),
+            ),
             ..Default::default()
         }
     })

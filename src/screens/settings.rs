@@ -47,7 +47,7 @@ pub(crate) enum Action {
 
 impl Settings {
     pub(crate) fn new(config: Config) -> Self {
-        let mut themes = vec!["System".to_string()];
+        let mut themes = vec!["Vanilla".to_string(), "System".to_string()];
         themes.extend(Theme::ALL.iter().map(|t| t.to_string()));
 
         let mut settings = Self {

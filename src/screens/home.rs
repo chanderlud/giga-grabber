@@ -196,14 +196,14 @@ impl Home {
                 .spacing(5)
                 .push(
                     container(download_group)
-                        .style(container::bordered_box)
+                        .style(styles::container::download_list_style())
                         .padding(2)
                         .width(Length::Fill)
                         .height(Length::FillPortion(2)),
                 )
                 .push(
                     container(error_log)
-                        .style(container::bordered_box)
+                        .style(styles::container::download_list_style())
                         .padding(8)
                         .width(Length::Fill)
                         .height(Length::FillPortion(1)),
