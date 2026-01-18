@@ -9,7 +9,7 @@ use iced::widget::{
     Column, Row, button, container, pick_list, scrollable, slider, space, svg, text, text_input,
 };
 use iced::{Element, Length, Theme};
-use native_dialog::FileDialog;
+use native_dialog::FileDialogBuilder;
 use num_traits::cast::ToPrimitive;
 use std::borrow::Cow;
 use std::io::Read;
@@ -164,9 +164,10 @@ impl Settings {
                 Action::None
             }
             Message::AddProxies => {
-                if let Ok(Some(file_path)) = FileDialog::new()
-                    .add_filter("Text File", &["txt"])
-                    .show_open_single_file()
+                if let Some(file_path) = FileDialogBuilder::default()
+                    .add_filter("Text File", ["txt"])
+                    .open_single_file()
+                    .location
                 {
                     match std::fs::File::open(file_path) {
                         Ok(mut file) => {

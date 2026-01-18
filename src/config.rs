@@ -76,7 +76,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             #[cfg(feature = "gui")]
-            theme: "System".to_string(),
+            theme: "Vanilla".to_string(),
             max_workers: 10,
             concurrency_budget: 10,
             max_retries: 3,
