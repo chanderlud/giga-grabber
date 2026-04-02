@@ -1,14 +1,14 @@
 # Giga Grabber
-A fast and stable [Mega](https://mega.nz) downloader using Reqwest for HTTP and Iced for the UI
+A fast and stable [Mega](https://mega.nz) downloader using Reqwest for HTTP and Iced for the UI. Learn more on [chanchan.dev](https://chanchan.dev/work/giga-grabber).
 
 ## Features
-- Concurrent downloads with customizable concurrency budget to optimize performance across all file sizes
-- Exponential backoff & timeouts, per-file cancellation & pausing, and other quality of life features
-- In the event of a crash or other failure, partial downloads can be resumed with minimal data loss
-- End-to-end encryption for all downloads
-- Download speeds can exceed 70MB/s on a single worker in ideal conditions
-- Cross-platform support (Windows, macOS, and Linux)
-- Simple CLI for downloading files & folders
+- Concurrent downloads with customizable concurrency budget to optimize performance across all file sizes.
+- Exponential backoff & timeouts, per-file cancellation & pausing, and other quality of life features.
+- In the event of a crash or other failure, partial downloads can be resumed with minimal data loss.
+- End-to-end encryption for all downloads.
+- Download speeds can exceed 70MB/s on a single worker in ideal conditions.
+- Cross-platform support (Windows, macOS, and Linux).
+- Simple CLI for downloading files & folders.
 
 ## CLI Usage
 ```shell
@@ -56,8 +56,8 @@ Options:
 ```
 
 ## Contributing
-All contributions are welcome
+All contributions are welcome.
 
 ## Warnings
-- Using proxies or a VPN to bypass Mega's download limit is a violation of their [Terms of Service](https://mega.nz/terms)
-- Giga Grabber can use a massive amount of bandwidth. Carefully consider the options you use
+- Using proxies or a VPN to bypass Mega's download limit is a violation of their [Terms of Service](https://mega.nz/terms).
+- Giga Grabber can use a massive amount of bandwidth. Carefully consider the options you use.
