@@ -129,7 +129,7 @@ impl Download {
 pub(crate) enum RunnerMessage {
     /// notifies UI that this download has become active
     Active(Download),
-    /// notifies the UI that this download if finished
+    /// notifies the UI that this download is finished
     Inactive(String),
     /// notifies the UI when non-critical errors bubble up
     Error(String),
