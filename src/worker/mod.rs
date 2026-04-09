@@ -90,7 +90,13 @@ impl Download {
     }
 
     pub(crate) fn pause(&self) {
-        let _ = self.pause_state.send_replace(PauseState::PauseRequested);
+        let _ = self.pause_state.send_if_modified(|state| {
+            if *state == PauseState::Running {
+                *state = PauseState::PauseRequested;
+                return true;
+            }
+            false
+        });
     }
 
     pub(crate) fn resume(&self) {
@@ -98,7 +104,10 @@ impl Download {
     }
 
     pub(crate) fn is_paused(&self) -> bool {
-        self.pause_state() == PauseState::Paused
+        matches!(
+            self.pause_state(),
+            PauseState::PauseRequested | PauseState::Paused
+        )
     }
 
     pub(crate) fn pause_receiver(&self) -> watch::Receiver<PauseState> {
@@ -287,13 +296,13 @@ pub(crate) async fn worker<D: DownloadDriver>(
                         match result {
                             // the partial file now contains the full contents of the download
                             Ok(true) => {
-                                if let Err(error) = rename(partial_path, full_path).await {
+                                if let Err(error) = rename(&partial_path, full_path).await {
                                     error!("Error renaming file: {error:?}");
                                     // treat rename failures as retryable errors so we do not
                                     // mark the download complete before the final file exists.
                                     download.set_retried().await;
                                     message_sender
-                                        .send(RunnerMessage::Error(error.to_string()))
+                                        .send(RunnerMessage::Error(format!("Error renaming file {partial_path:?}: {error:?}")))
                                         .await?;
                                     // requeue download
                                     download_sender.send(download).await?;
