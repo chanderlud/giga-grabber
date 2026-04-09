@@ -9,9 +9,11 @@ use cipher::StreamCipherSeek;
 use cipher::{BlockDecrypt, BlockDecryptMut, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use futures::StreamExt;
+use log::error;
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
@@ -453,12 +455,7 @@ impl MegaClient {
             share_keys.insert(entry.handle.clone(), share_key);
         }
 
-        for share_ref in &resp.s {
-            let _ = (&share_ref.user, &share_ref.handle);
-        }
-
         for file in &resp.nodes {
-            let _ = (&file.owner, &file.sharing_user);
             let Some(sk) = file.sharing_key.as_deref() else {
                 continue;
             };
@@ -488,41 +485,65 @@ impl MegaClient {
                 continue;
             };
 
-            let mut file_key_bytes = match decrypt_node_key(file_key_str, &share_keys) {
-                Some(k) => k,
-                None => continue,
-            };
+            let mut node_material: Option<([u8; 16], Option<[u8; 8]>, String)> = None;
+            let mut last_attr_error = None;
+            let has_candidate = decrypt_node_key_candidates(
+                file_key_str,
+                &share_keys,
+                &parsed.node_id,
+                |mut file_key_bytes| {
+                    let (aes_key, aes_iv) = if kind == NodeKind::File {
+                        if file_key_bytes.len() != 32 {
+                            return ControlFlow::Continue(());
+                        }
+                        // 32 bytes: [16 key][8 iv][8 mac]
+                        unmerge_key_mac(&mut file_key_bytes);
 
-            let (aes_key, aes_iv) = if kind == NodeKind::File {
-                if file_key_bytes.len() != 32 {
-                    continue;
+                        let (key_part, rest) = file_key_bytes.split_at(16);
+                        let (iv_part, _mac_part) = rest.split_at(8);
+
+                        let mut aes_key = [0u8; 16];
+                        aes_key.copy_from_slice(key_part);
+
+                        let mut aes_iv = [0u8; 8];
+                        aes_iv.copy_from_slice(iv_part);
+
+                        (aes_key, Some(aes_iv))
+                    } else {
+                        if file_key_bytes.len() != 16 {
+                            return ControlFlow::Continue(());
+                        }
+                        // 16 bytes: just AES key, no IV.
+                        let mut aes_key = [0u8; 16];
+                        aes_key.copy_from_slice(&file_key_bytes[..16]);
+                        (aes_key, None)
+                    };
+
+                    match decrypt_attrs(&aes_key, &file.attr) {
+                        Ok(name) => {
+                            node_material = Some((aes_key, aes_iv, name));
+                            ControlFlow::Break(())
+                        }
+                        Err(error) => {
+                            last_attr_error = Some(error);
+                            ControlFlow::Continue(())
+                        }
+                    }
+                },
+            );
+
+            if !has_candidate {
+                continue;
+            }
+
+            let Some((aes_key, aes_iv, name)) = node_material else {
+                if let Some(error) = last_attr_error {
+                    error!(
+                        "failed to decrypt attributes for {}: {:?}",
+                        file.attr, error
+                    );
                 }
-                // 32 bytes: [16 key][8 iv][8 mac]
-                unmerge_key_mac(&mut file_key_bytes);
-
-                let (key_part, rest) = file_key_bytes.split_at(16);
-                let (iv_part, _mac_part) = rest.split_at(8);
-
-                let mut aes_key = [0u8; 16];
-                aes_key.copy_from_slice(key_part);
-
-                let mut aes_iv = [0u8; 8];
-                aes_iv.copy_from_slice(iv_part);
-
-                (aes_key, Some(aes_iv))
-            } else {
-                if file_key_bytes.len() != 16 {
-                    continue;
-                }
-                // 16 bytes: just AES key, no IV.
-                let mut aes_key = [0u8; 16];
-                aes_key.copy_from_slice(&file_key_bytes[..16]);
-                (aes_key, None)
-            };
-
-            let name = match decrypt_attrs(&aes_key, &file.attr) {
-                Ok(name) => name,
-                Err(_) => continue,
+                continue;
             };
 
             let node = Node {
@@ -601,10 +622,6 @@ struct FileNode {
     key: Option<String>,
     #[serde(rename = "s")]
     size: Option<u64>,
-    #[serde(rename = "u")]
-    owner: Option<String>,
-    #[serde(rename = "su")]
-    sharing_user: Option<String>,
     #[serde(rename = "sk")]
     sharing_key: Option<String>,
 }
@@ -617,14 +634,6 @@ struct SharedKey {
     key: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ShareRef {
-    #[serde(rename = "u")]
-    user: String,
-    #[serde(rename = "h")]
-    handle: String,
-}
-
 /// Response for FetchNodes
 #[derive(Debug, Deserialize)]
 struct FetchNodesResponse {
@@ -632,8 +641,6 @@ struct FetchNodesResponse {
     nodes: Vec<FileNode>,
     #[serde(default, rename = "ok")]
     ok: Vec<SharedKey>,
-    #[serde(default, rename = "s")]
-    s: Vec<ShareRef>,
 }
 
 /// Response for Download
@@ -687,11 +694,22 @@ fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
     }
 }
 
-fn decrypt_node_key(key_field: &str, share_keys: &HashMap<String, [u8; 16]>) -> Option<Vec<u8>> {
+fn decrypt_node_key_candidates<F>(
+    key_field: &str,
+    share_keys: &HashMap<String, [u8; 16]>,
+    root_handle: &str,
+    mut on_candidate: F,
+) -> bool
+where
+    F: FnMut(Vec<u8>) -> ControlFlow<()>,
+{
     let entries: Vec<(&str, &str)> = key_field
         .split('/')
         .filter_map(|entry| entry.split_once(':'))
         .collect();
+
+    let mut seen = HashSet::new();
+    let mut emitted_any = false;
 
     // Pass 1: exact handle -> share key match.
     for (handle, b64) in &entries {
@@ -706,11 +724,25 @@ fn decrypt_node_key(key_field: &str, share_keys: &HashMap<String, [u8; 16]>) -> 
             continue;
         }
         decrypt_ebc_in_place(share_key, &mut decoded);
-        return Some(decoded);
+        if seen.insert(decoded.clone()) {
+            emitted_any = true;
+            if on_candidate(decoded).is_break() {
+                return true;
+            }
+        }
     }
 
-    // Pass 2: fallback, try all known share keys.
-    for (_, b64) in entries {
+    // Pass 2: deterministic fallback order (root share key first, then sorted handles).
+    let mut share_key_handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
+    share_key_handles.sort_unstable();
+    if let Some(root_idx) = share_key_handles
+        .iter()
+        .position(|handle| *handle == root_handle)
+    {
+        share_key_handles.swap(0, root_idx);
+    }
+
+    for (_, b64) in &entries {
         let decoded = match URL_SAFE_NO_PAD.decode(b64) {
             Ok(d) => d,
             Err(_) => continue,
@@ -719,14 +751,22 @@ fn decrypt_node_key(key_field: &str, share_keys: &HashMap<String, [u8; 16]>) -> 
             continue;
         }
 
-        if let Some(share_key) = share_keys.values().next() {
+        for handle in &share_key_handles {
+            let Some(share_key) = share_keys.get(*handle) else {
+                continue;
+            };
             let mut candidate = decoded.clone();
             decrypt_ebc_in_place(share_key, &mut candidate);
-            return Some(candidate);
+            if seen.insert(candidate.clone()) {
+                emitted_any = true;
+                if on_candidate(candidate).is_break() {
+                    return true;
+                }
+            }
         }
     }
 
-    None
+    emitted_any
 }
 
 /// XOR first 16 bytes with second 16 bytes (undo merged key+MAC)
