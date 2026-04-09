@@ -399,13 +399,56 @@ impl MegaClient {
 
         let mut nodes_map: HashMap<String, Node> = HashMap::new();
 
-        // Root folder key used to decrypt child keys.
-        let root_key = parsed.node_key;
+        let root_key: [u8; 16] = parsed
+            .node_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("unexpected folder key size after validation"))?;
+
+        let mut share_keys: HashMap<String, [u8; 16]> = HashMap::new();
+        share_keys.insert(parsed.node_id.clone(), root_key);
+
+        for entry in &resp.ok {
+            let mut decoded = match URL_SAFE_NO_PAD.decode(&entry.key) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            if decoded.len() != 16 {
+                continue;
+            }
+            decrypt_ebc_in_place(&root_key, &mut decoded);
+            let mut share_key = [0u8; 16];
+            share_key.copy_from_slice(&decoded);
+            share_keys.insert(entry.handle.clone(), share_key);
+        }
+
+        for share_ref in &resp.s {
+            let _ = (&share_ref.user, &share_ref.handle);
+        }
+
+        for file in &resp.nodes {
+            let _ = (&file.owner, &file.sharing_user);
+            let Some(sk) = file.sharing_key.as_deref() else {
+                continue;
+            };
+            let mut decoded = match URL_SAFE_NO_PAD.decode(sk) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            if decoded.len() != 16 {
+                continue;
+            }
+            decrypt_ebc_in_place(&root_key, &mut decoded);
+            let mut share_key = [0u8; 16];
+            share_key.copy_from_slice(&decoded);
+            share_keys.insert(file.handle.clone(), share_key);
+        }
 
         for file in resp.nodes {
             let kind = match file.kind {
                 0 => NodeKind::File,
                 1 => NodeKind::Folder,
+                2 | 3 | 4 => continue,
                 _ => continue, // skip unknown types
             };
 
@@ -414,43 +457,15 @@ impl MegaClient {
                 continue;
             };
 
-            // Keys are like "userhandle:base64key[/userhandle:base64key...]"
-            let mut file_key_bytes_opt = None;
-            for entry in file_key_str.split('/') {
-                let (_, base64_part) = match entry.split_once(':') {
-                    Some(parts) => parts,
-                    None => continue,
-                };
-
-                if base64_part.len() >= 44 {
-                    // RSA-based key; ignoring for this barebones client.
-                    continue;
-                }
-
-                let mut decoded = match URL_SAFE_NO_PAD.decode(base64_part) {
-                    Ok(d) => d,
-                    Err(_) => continue,
-                };
-
-                // File -> 32 bytes, folder -> 16 bytes
-                if (kind == NodeKind::File && decoded.len() != 32)
-                    || (kind == NodeKind::Folder && decoded.len() != 16)
-                {
-                    continue;
-                }
-
-                // Decrypt with root folder key using AES-ECB.
-                decrypt_ebc_in_place(&root_key, &mut decoded);
-                file_key_bytes_opt = Some(decoded);
-                break;
-            }
-
-            let mut file_key_bytes = match file_key_bytes_opt {
+            let mut file_key_bytes = match decrypt_node_key(file_key_str, &share_keys) {
                 Some(k) => k,
                 None => continue,
             };
 
             let (aes_key, aes_iv) = if kind == NodeKind::File {
+                if file_key_bytes.len() != 32 {
+                    continue;
+                }
                 // 32 bytes: [16 key][8 iv][8 mac]
                 unmerge_key_mac(&mut file_key_bytes);
 
@@ -465,18 +480,24 @@ impl MegaClient {
 
                 (aes_key, Some(aes_iv))
             } else {
+                if file_key_bytes.len() != 16 {
+                    continue;
+                }
                 // 16 bytes: just AES key, no IV.
                 let mut aes_key = [0u8; 16];
                 aes_key.copy_from_slice(&file_key_bytes[..16]);
                 (aes_key, None)
             };
 
-            let name = decrypt_attrs(&aes_key, &file.attr)?;
+            let name = match decrypt_attrs(&aes_key, &file.attr) {
+                Ok(name) => name,
+                Err(_) => continue,
+            };
 
             let node = Node {
                 name,
                 handle: file.handle.clone(),
-                parent: Some(file.parent),
+                parent: file.parent,
                 kind,
                 size: file.size.unwrap_or(0),
                 aes_key,
@@ -543,12 +564,34 @@ struct FileNode {
     attr: String,
     #[serde(rename = "h")]
     handle: String,
-    #[serde(rename = "p")]
-    parent: String,
+    #[serde(rename = "p", default)]
+    parent: Option<String>,
     #[serde(rename = "k")]
     key: Option<String>,
     #[serde(rename = "s")]
     size: Option<u64>,
+    #[serde(rename = "u")]
+    owner: Option<String>,
+    #[serde(rename = "su")]
+    sharing_user: Option<String>,
+    #[serde(rename = "sk")]
+    sharing_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedKey {
+    #[serde(rename = "h")]
+    handle: String,
+    #[serde(rename = "k")]
+    key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShareRef {
+    #[serde(rename = "u")]
+    user: String,
+    #[serde(rename = "h")]
+    handle: String,
 }
 
 /// Response for FetchNodes
@@ -556,6 +599,10 @@ struct FileNode {
 struct FetchNodesResponse {
     #[serde(rename = "f")]
     nodes: Vec<FileNode>,
+    #[serde(default, rename = "ok")]
+    ok: Vec<SharedKey>,
+    #[serde(default, rename = "s")]
+    s: Vec<ShareRef>,
 }
 
 /// Response for Download
@@ -607,6 +654,48 @@ fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
     for block in data.chunks_mut(16) {
         aes.decrypt_block(block.into());
     }
+}
+
+fn decrypt_node_key(key_field: &str, share_keys: &HashMap<String, [u8; 16]>) -> Option<Vec<u8>> {
+    let entries: Vec<(&str, &str)> = key_field
+        .split('/')
+        .filter_map(|entry| entry.split_once(':'))
+        .collect();
+
+    // Pass 1: exact handle -> share key match.
+    for (handle, b64) in &entries {
+        let Some(share_key) = share_keys.get(*handle) else {
+            continue;
+        };
+        let mut decoded = match URL_SAFE_NO_PAD.decode(*b64) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if decoded.len() != 16 && decoded.len() != 32 {
+            continue;
+        }
+        decrypt_ebc_in_place(share_key, &mut decoded);
+        return Some(decoded);
+    }
+
+    // Pass 2: fallback, try all known share keys.
+    for (_, b64) in entries {
+        let decoded = match URL_SAFE_NO_PAD.decode(b64) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if decoded.len() != 16 && decoded.len() != 32 {
+            continue;
+        }
+
+        for share_key in share_keys.values() {
+            let mut candidate = decoded.clone();
+            decrypt_ebc_in_place(share_key, &mut candidate);
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 /// XOR first 16 bytes with second 16 bytes (undo merged key+MAC)
