@@ -109,10 +109,6 @@ impl Download {
         *self.pause_state.borrow()
     }
 
-    pub(crate) fn mark_paused(&self) {
-        let _ = self.pause_state.send_replace(PauseState::Paused);
-    }
-
     pub(crate) fn mark_paused_if_requested(&self) -> bool {
         let _ = self.pause_state.send_if_modified(|state| {
             if *state == PauseState::PauseRequested {
@@ -162,7 +158,7 @@ impl DownloadDriver for MegaClient {
         download: &Download,
         dest_path: &Path,
     ) -> impl Future<Output = anyhow::Result<bool>> + Send {
-        async move { MegaClient::download_file(self, download, dest_path).await }
+        MegaClient::download_file(self, download, dest_path)
     }
 }
 
@@ -373,7 +369,7 @@ pub(crate) fn retry_decision(
 
 #[cfg(test)]
 pub(crate) mod fake {
-    use super::{Download, DownloadDriver, PauseState};
+    use super::{Download, DownloadDriver};
     use anyhow::anyhow;
     use std::collections::VecDeque;
     use std::path::Path;
@@ -408,6 +404,37 @@ pub(crate) mod fake {
         pub(crate) fn call_count(&self) -> usize {
             self.call_count.load(Ordering::Relaxed)
         }
+
+        async fn run_action(&self, download: &Download) -> anyhow::Result<bool> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            let action = self
+                .actions
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(DriverAction::Complete);
+            match action {
+                DriverAction::Complete => Ok(true),
+                DriverAction::Pause => {
+                    download.pause();
+                    download.mark_paused_if_requested();
+                    Ok(false)
+                }
+                DriverAction::PauseThenQuickResume => {
+                    download.pause();
+                    download.resume();
+                    download.mark_paused_if_requested();
+                    Ok(false)
+                }
+                DriverAction::Fail(message) => Err(anyhow!(message)),
+                DriverAction::Hang => loop {
+                    if download.stop.is_cancelled() {
+                        return Ok(true);
+                    }
+                    sleep(Duration::from_millis(50)).await;
+                },
+            }
+        }
     }
 
     impl DownloadDriver for FakeDriver {
@@ -416,37 +443,7 @@ pub(crate) mod fake {
             download: &Download,
             _dest_path: &Path,
         ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
-            async move {
-                self.call_count.fetch_add(1, Ordering::Relaxed);
-                let action = self
-                    .actions
-                    .lock()
-                    .await
-                    .pop_front()
-                    .unwrap_or(DriverAction::Complete);
-                match action {
-                    DriverAction::Complete => Ok(true),
-                    DriverAction::Pause => {
-                        if download.pause_state() != PauseState::Paused {
-                            download.mark_paused();
-                        }
-                        Ok(false)
-                    }
-                    DriverAction::PauseThenQuickResume => {
-                        download.pause();
-                        download.resume();
-                        download.mark_paused_if_requested();
-                        Ok(false)
-                    }
-                    DriverAction::Fail(message) => Err(anyhow!(message)),
-                    DriverAction::Hang => loop {
-                        if download.stop.is_cancelled() {
-                            return Ok(true);
-                        }
-                        sleep(Duration::from_millis(50)).await;
-                    },
-                }
-            }
+            self.run_action(download)
         }
     }
 }

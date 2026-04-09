@@ -97,6 +97,15 @@ impl MegaClient {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_origin(http: reqwest::Client, origin: Url) -> Self {
+        Self {
+            http,
+            origin,
+            id_counter: Default::default(),
+        }
+    }
+
     fn next_request_id(&self) -> u64 {
         self.id_counter.fetch_add(1, Ordering::SeqCst)
     }

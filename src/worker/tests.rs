@@ -2,16 +2,22 @@ use super::fake::{DriverAction, FakeDriver};
 use super::{Download, PauseState, RunnerMessage, spawn_workers};
 use crate::MegaFile;
 use crate::config::Config;
-use crate::mega_client::Node;
+use crate::mega_client::{MegaClient, Node};
+use aes::Aes128;
+use cipher::{KeyIvInit, StreamCipher};
+use ctr::Ctr128BE;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 fn make_download(name: &str, size: u64, dir: PathBuf) -> Download {
     let node = Node::test_file(format!("handle-{name}"), name.to_string(), size);
@@ -50,6 +56,294 @@ async fn wait_for_inactive(receiver: &mut Receiver<RunnerMessage>, expected: usi
             inactive += 1;
         }
     }
+}
+
+fn encrypt_ctr_zero_key(payload: &[u8]) -> Vec<u8> {
+    let mut encrypted = payload.to_vec();
+    let key = [0_u8; 16];
+    let iv = [0_u8; 16];
+    let mut ctr = Ctr128BE::<Aes128>::new((&key).into(), (&iv).into());
+    ctr.apply_keystream(&mut encrypted);
+    encrypted
+}
+
+#[derive(Clone)]
+struct FixtureState {
+    saw_non_zero_range: Arc<AtomicBool>,
+    download_requests: Arc<AtomicUsize>,
+    phase: Arc<AtomicUsize>,
+}
+
+async fn wait_for_fixture_phase(state: &FixtureState, target: usize) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if state.phase.load(Ordering::SeqCst) >= target {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fixture phase timeout");
+}
+
+async fn spawn_local_mega_fixture(
+    encrypted_payload: Vec<u8>,
+) -> (
+    Url,
+    FixtureState,
+    CancellationToken,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local fixture");
+    let addr = listener.local_addr().expect("fixture local addr");
+    let base_url = Url::parse(&format!("http://{addr}/")).expect("fixture base URL");
+
+    let state = FixtureState {
+        saw_non_zero_range: Arc::new(AtomicBool::new(false)),
+        download_requests: Arc::new(AtomicUsize::new(0)),
+        phase: Arc::new(AtomicUsize::new(0)),
+    };
+    let state_for_task = state.clone();
+    let shutdown = CancellationToken::new();
+    let shutdown_for_task = shutdown.clone();
+
+    let server = tokio::spawn(async move {
+        loop {
+            let accept_result = tokio::select! {
+                _ = shutdown_for_task.cancelled() => break,
+                result = listener.accept() => result,
+            };
+            let Ok((mut socket, _)) = accept_result else {
+                break;
+            };
+
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 2048];
+            let header_end = loop {
+                let read = match socket.read(&mut buf).await {
+                    Ok(0) => break None,
+                    Ok(n) => n,
+                    Err(_) => break None,
+                };
+                request.extend_from_slice(&buf[..read]);
+                if let Some(idx) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(idx + 4);
+                }
+            };
+            let Some(header_end) = header_end else {
+                continue;
+            };
+
+            let request_head = String::from_utf8_lossy(&request[..header_end]);
+            let mut lines = request_head.split("\r\n");
+            let request_line = lines.next().unwrap_or_default();
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or_default();
+            let path = parts.next().unwrap_or_default();
+
+            let mut range_start = 0usize;
+            let mut content_length = 0usize;
+            for line in lines {
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("range")
+                {
+                    let header_val = value.trim();
+                    if let Some(raw_start) = header_val
+                        .strip_prefix("bytes=")
+                        .and_then(|rest| rest.split('-').next())
+                    {
+                        range_start = raw_start.parse::<usize>().unwrap_or(0);
+                    }
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap_or(0);
+                }
+            }
+
+            let body_read = request.len().saturating_sub(header_end);
+            if content_length > body_read {
+                let mut remaining = content_length - body_read;
+                while remaining > 0 {
+                    let read = match socket.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    remaining = remaining.saturating_sub(read);
+                }
+            }
+
+            if method == "POST" && path.starts_with("/cs") {
+                let cs_body = format!(
+                    r#"[{{"g":"http://{addr}/file","s":{},"at":"QQ"}}]"#,
+                    encrypted_payload.len()
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cs_body.len(),
+                    cs_body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                continue;
+            }
+
+            if method != "GET" || path != "/file" {
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await;
+                continue;
+            }
+
+            let request_index = state_for_task
+                .download_requests
+                .fetch_add(1, Ordering::SeqCst);
+            if range_start > 0 {
+                state_for_task
+                    .saw_non_zero_range
+                    .store(true, Ordering::SeqCst);
+            }
+
+            let start = range_start.min(encrypted_payload.len());
+            let payload = &encrypted_payload[start..];
+            let status = if start > 0 {
+                "206 Partial Content"
+            } else {
+                "200 OK"
+            };
+            let mut headers = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n",
+                payload.len()
+            );
+            if start > 0 {
+                let end = encrypted_payload.len().saturating_sub(1);
+                headers.push_str(&format!(
+                    "Content-Range: bytes {start}-{end}/{}\r\n",
+                    encrypted_payload.len()
+                ));
+            }
+            headers.push_str("\r\n");
+
+            if request_index == 0 {
+                state_for_task.phase.store(1, Ordering::SeqCst);
+                sleep(Duration::from_millis(500)).await;
+            }
+
+            let _ = socket.write_all(headers.as_bytes()).await;
+
+            if request_index == 1 {
+                state_for_task.phase.store(2, Ordering::SeqCst);
+
+                let first_chunk = payload.len().min(1_200_000);
+                let _ = socket.write_all(&payload[..first_chunk]).await;
+                let _ = socket.flush().await;
+                state_for_task.phase.store(3, Ordering::SeqCst);
+                sleep(Duration::from_millis(500)).await;
+                let _ = socket.write_all(&payload[first_chunk..]).await;
+                let _ = socket.flush().await;
+            } else {
+                let _ = socket.write_all(payload).await;
+                let _ = socket.flush().await;
+            }
+        }
+    });
+
+    (base_url, state, shutdown, server)
+}
+
+#[tokio::test]
+async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_complete() {
+    let temp = TempDir::new().expect("temp dir");
+    let expected_plain: Vec<u8> = (0..1_300_000).map(|i| (i % 251) as u8).collect();
+    let encrypted_payload = encrypt_ctr_zero_key(&expected_plain);
+
+    let (base_url, fixture_state, fixture_shutdown, fixture_task) =
+        spawn_local_mega_fixture(encrypted_payload).await;
+
+    let download = make_download(
+        "real-client-pause.bin",
+        expected_plain.len() as u64,
+        temp.path().to_path_buf(),
+    );
+    let (download_sender, download_receiver) = kanal::unbounded_async();
+    let (message_sender, mut message_receiver) = channel(64);
+    let cancel = CancellationToken::new();
+    let config = Arc::new(Config::default());
+    let mega = MegaClient::with_origin(reqwest::Client::new(), base_url);
+
+    let workers = spawn_workers(
+        mega,
+        config,
+        download_receiver,
+        download_sender.clone(),
+        message_sender,
+        cancel.clone(),
+        1,
+    );
+
+    download_sender
+        .send(download.clone())
+        .await
+        .expect("enqueue download");
+
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Active(_)
+    ));
+
+    wait_for_fixture_phase(&fixture_state, 1).await;
+    download.pause();
+    wait_for_paused(&download).await;
+    download.resume();
+
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Active(_)
+    ));
+
+    wait_for_fixture_phase(&fixture_state, 3).await;
+    download.pause();
+    wait_for_paused(&download).await;
+    download.resume();
+
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Active(_)
+    ));
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Inactive(_)
+    ));
+
+    let full_path = download.file_path.join(&download.node.name);
+    let contents = tokio::fs::read(&full_path)
+        .await
+        .expect("read completed file");
+    assert_eq!(contents, expected_plain);
+    assert!(
+        fixture_state.saw_non_zero_range.load(Ordering::SeqCst),
+        "expected resumed GET request with non-zero Range offset"
+    );
+
+    cancel.cancel();
+    for worker in workers {
+        worker.await.expect("worker join").expect("worker result");
+    }
+
+    fixture_shutdown.cancel();
+    timeout(Duration::from_secs(2), fixture_task)
+        .await
+        .expect("fixture task join timeout")
+        .expect("fixture task join failure");
 }
 
 #[tokio::test]
