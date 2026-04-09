@@ -1,4 +1,4 @@
-use crate::Download;
+use crate::worker::{Download, PauseState};
 use aes::Aes128;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::watch;
 use tokio::{fs, select};
 use url::Url;
 
@@ -45,6 +46,23 @@ pub(crate) struct Node {
     aes_key: [u8; 16],
     aes_iv: Option<[u8; 8]>,
     pub(crate) root_handle: String,
+}
+
+#[cfg(test)]
+impl Node {
+    pub(crate) fn test_file(handle: impl Into<String>, name: impl Into<String>, size: u64) -> Self {
+        let handle = handle.into();
+        Self {
+            name: name.into(),
+            handle: handle.clone(),
+            parent: Some("root".to_string()),
+            kind: NodeKind::File,
+            size,
+            aes_key: [0; 16],
+            aes_iv: Some([0; 8]),
+            root_handle: handle,
+        }
+    }
 }
 
 /// What kind of public link this is
@@ -156,17 +174,20 @@ impl MegaClient {
             req = req.header(header::RANGE, range_header);
         }
 
+        let mut pause_receiver = download.pause_receiver();
+
         let resp = select! {
+            _ = pause_loop(&mut pause_receiver) => {
+                // Pause may have been resumed concurrently; only persist Paused
+                // when a pause intent is still current.
+                download.mark_paused_if_requested();
+                return Ok(false);
+            }
             result = req.send() => {
                 result
                     .context("MEGA file download request failed")?
                     .error_for_status()
                     .context("MEGA file download HTTP error")?
-            }
-            _ = download.pause.notified() => {
-                // the download is paused now
-                download.paused.store(true, Relaxed);
-                return Ok(false);
             }
         };
 
@@ -182,9 +203,10 @@ impl MegaClient {
 
         loop {
             select! {
-                _ = download.pause.notified() => {
-                    // the download is paused now
-                    download.paused.store(true, Relaxed);
+                _ = pause_loop(&mut pause_receiver) => {
+                    // Pause may have been resumed concurrently; only persist Paused
+                    // when a pause intent is still current.
+                    download.mark_paused_if_requested();
                     return Ok(false);
                 }
                 chunk_option = stream.next() => {
@@ -639,4 +661,16 @@ fn decrypt_attrs(aes_key: &[u8; 16], attr_b64: &str) -> Result<String> {
         serde_json::from_slice(json_bytes).context("parsing node attributes JSON")?;
 
     Ok(attrs.name)
+}
+
+async fn pause_loop(pause_receiver: &mut watch::Receiver<PauseState>) {
+    loop {
+        let state = *pause_receiver.borrow();
+        if matches!(state, PauseState::PauseRequested | PauseState::Paused) {
+            break;
+        }
+        if pause_receiver.changed().await.is_err() {
+            break;
+        }
+    }
 }
