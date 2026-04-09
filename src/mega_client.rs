@@ -479,7 +479,7 @@ impl MegaClient {
             let kind = match file.kind {
                 0 => NodeKind::File,
                 1 => NodeKind::Folder,
-                2 | 3 | 4 => continue,
+                2..=4 => continue,
                 _ => continue, // skip unknown types
             };
 
@@ -719,7 +719,7 @@ fn decrypt_node_key(key_field: &str, share_keys: &HashMap<String, [u8; 16]>) -> 
             continue;
         }
 
-        for share_key in share_keys.values() {
+        if let Some(share_key) = share_keys.values().next() {
             let mut candidate = decoded.clone();
             decrypt_ebc_in_place(share_key, &mut candidate);
             return Some(candidate);
