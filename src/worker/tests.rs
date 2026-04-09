@@ -683,6 +683,66 @@ async fn test_retry_on_error() {
 }
 
 #[tokio::test]
+async fn test_rename_failure_is_reported_and_not_marked_inactive_immediately() {
+    let temp = TempDir::new().expect("temp dir");
+    let download = make_download("rename-fail.bin", 1024, temp.path().to_path_buf());
+    let driver = make_driver(vec![DriverAction::CompleteWithoutPartial]);
+    let (download_sender, download_receiver) = kanal::unbounded_async();
+    let (message_sender, mut message_receiver) = channel(64);
+    let cancel = CancellationToken::new();
+
+    let mut config = Config::default();
+    config.max_retries = 1;
+    config.min_retry_delay = Duration::ZERO;
+    config.max_retry_delay = Duration::from_millis(1);
+
+    let workers = spawn_workers(
+        driver,
+        Arc::new(config),
+        download_receiver,
+        download_sender.clone(),
+        message_sender,
+        cancel.clone(),
+        1,
+    );
+
+    download_sender
+        .send(download)
+        .await
+        .expect("enqueue download");
+
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Active(_)
+    ));
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Error(_)
+    ));
+
+    let mut saw_max_retries_error = false;
+    let mut saw_inactive = false;
+    while !(saw_max_retries_error && saw_inactive) {
+        match next_message(&mut message_receiver).await {
+            RunnerMessage::Error(error) => {
+                if error.contains("Max retries reached") {
+                    saw_max_retries_error = true;
+                }
+            }
+            RunnerMessage::Inactive(_) => saw_inactive = true,
+            RunnerMessage::Active(_) => (),
+            #[cfg(feature = "gui")]
+            RunnerMessage::Finished => (),
+        }
+    }
+
+    cancel.cancel();
+    for worker in workers {
+        worker.await.expect("worker join").expect("worker result");
+    }
+}
+
+#[tokio::test]
 async fn test_max_retries_exceeded() {
     let temp = TempDir::new().expect("temp dir");
     let download = make_download("retry-fail.bin", 1024, temp.path().to_path_buf());

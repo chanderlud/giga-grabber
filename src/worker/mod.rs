@@ -289,6 +289,15 @@ pub(crate) async fn worker<D: DownloadDriver>(
                             Ok(true) => {
                                 if let Err(error) = rename(partial_path, full_path).await {
                                     error!("Error renaming file: {error:?}");
+                                    // treat rename failures as retryable errors so we do not
+                                    // mark the download complete before the final file exists.
+                                    download.set_retried().await;
+                                    message_sender
+                                        .send(RunnerMessage::Error(error.to_string()))
+                                        .await?;
+                                    // requeue download
+                                    download_sender.send(download).await?;
+                                    continue;
                                 }
                             }
                             // the download has been paused
@@ -386,6 +395,7 @@ pub(crate) mod fake {
     #[derive(Debug, Clone)]
     pub(crate) enum DriverAction {
         Complete,
+        CompleteWithoutPartial,
         Pause,
         PauseThenQuickResume,
         Fail(String),
@@ -410,7 +420,7 @@ pub(crate) mod fake {
             self.call_count.load(Ordering::Relaxed)
         }
 
-        async fn run_action(&self, download: &Download) -> anyhow::Result<bool> {
+        async fn run_action(&self, download: &Download, dest_path: &Path) -> anyhow::Result<bool> {
             self.call_count.fetch_add(1, Ordering::Relaxed);
             let action = self
                 .actions
@@ -419,7 +429,14 @@ pub(crate) mod fake {
                 .pop_front()
                 .unwrap_or(DriverAction::Complete);
             match action {
-                DriverAction::Complete => Ok(true),
+                DriverAction::Complete => {
+                    if let Some(parent) = dest_path.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    tokio::fs::write(dest_path, b"fake").await?;
+                    Ok(true)
+                }
+                DriverAction::CompleteWithoutPartial => Ok(true),
                 DriverAction::Pause => {
                     download.pause();
                     download.mark_paused_if_requested();
@@ -446,9 +463,9 @@ pub(crate) mod fake {
         fn download_file(
             &self,
             download: &Download,
-            _dest_path: &Path,
+            dest_path: &Path,
         ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
-            self.run_action(download)
+            self.run_action(download, dest_path)
         }
     }
 }
