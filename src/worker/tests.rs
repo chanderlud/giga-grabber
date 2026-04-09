@@ -87,6 +87,19 @@ async fn wait_for_fixture_phase(state: &FixtureState, target: usize) {
     .expect("fixture phase timeout");
 }
 
+async fn wait_for_downloaded_at_least(download: &Download, min_bytes: usize) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if download.downloaded.load(Ordering::Relaxed) >= min_bytes {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("downloaded bytes threshold timeout");
+}
+
 async fn spawn_local_mega_fixture(
     encrypted_payload: Vec<u8>,
 ) -> (
@@ -311,6 +324,8 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
     ));
 
     wait_for_fixture_phase(&fixture_state, 3).await;
+    // Ensure the partial file is large enough to force a non-zero resume range.
+    wait_for_downloaded_at_least(&download, 1_100_000).await;
     download.pause();
     wait_for_paused(&download).await;
     download.resume();
