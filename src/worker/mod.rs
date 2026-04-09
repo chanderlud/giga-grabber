@@ -303,7 +303,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
 
                                     select! {
                                         _ = cancellation_token.cancelled() => break 'worker,
-                                        _ = download.stop.cancelled() => continue 'worker,
+                                        _ = download.stop.cancelled() => {
+                                            message_sender
+                                                .send(RunnerMessage::Inactive(download.node.handle.clone()))
+                                                .await?;
+                                            continue 'worker;
+                                        }
                                         result = pause_receiver.changed() => {
                                             if result.is_err() {
                                                 break;

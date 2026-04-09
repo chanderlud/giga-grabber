@@ -630,8 +630,10 @@ async fn test_pause_then_cancel() {
     wait_for_paused(&download).await;
     download.stop.cancel();
 
-    let maybe_msg = timeout(Duration::from_millis(300), message_receiver.recv()).await;
-    assert!(maybe_msg.is_err(), "unexpected message after pause-cancel");
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Inactive(_)
+    ));
 
     cancel.cancel();
     for worker in workers {
