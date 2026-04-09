@@ -654,10 +654,12 @@ async fn test_retry_on_error() {
     let (message_sender, mut message_receiver) = channel(64);
     let cancel = CancellationToken::new();
 
-    let mut config = Config::default();
-    config.max_retries = 3;
-    config.min_retry_delay = Duration::ZERO;
-    config.max_retry_delay = Duration::from_millis(1);
+    let config = Config {
+        max_retries: 3,
+        min_retry_delay: Duration::ZERO,
+        max_retry_delay: Duration::from_millis(1),
+        ..Default::default()
+    };
 
     let workers = spawn_workers(
         driver.clone(),
@@ -691,10 +693,12 @@ async fn test_rename_failure_is_reported_and_not_marked_inactive_immediately() {
     let (message_sender, mut message_receiver) = channel(64);
     let cancel = CancellationToken::new();
 
-    let mut config = Config::default();
-    config.max_retries = 1;
-    config.min_retry_delay = Duration::ZERO;
-    config.max_retry_delay = Duration::from_millis(1);
+    let config = Config {
+        max_retries: 1,
+        min_retry_delay: Duration::ZERO,
+        max_retry_delay: Duration::from_millis(1),
+        ..Default::default()
+    };
 
     let workers = spawn_workers(
         driver,
@@ -755,10 +759,12 @@ async fn test_max_retries_exceeded() {
     let (message_sender, mut message_receiver) = channel(64);
     let cancel = CancellationToken::new();
 
-    let mut config = Config::default();
-    config.max_retries = 2;
-    config.min_retry_delay = Duration::ZERO;
-    config.max_retry_delay = Duration::from_millis(1);
+    let config = Config {
+        max_retries: 2,
+        min_retry_delay: Duration::ZERO,
+        max_retry_delay: Duration::from_millis(1),
+        ..Default::default()
+    };
 
     let workers = spawn_workers(
         driver.clone(),
@@ -856,8 +862,10 @@ async fn test_concurrency_semaphore_limits() {
     let (message_sender, mut message_receiver) = channel(128);
     let cancel = CancellationToken::new();
 
-    let mut config = Config::default();
-    config.concurrency_budget = 10;
+    let config = Config {
+        concurrency_budget: 10,
+        ..Default::default()
+    };
     let workers = spawn_workers(
         driver,
         Arc::new(config),
