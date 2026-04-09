@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::fs::{create_dir_all, rename};
+use tokio::fs::{create_dir_all, rename, try_exists};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{Mutex, RwLock, Semaphore, watch};
 use tokio::time::{Instant, sleep};
@@ -247,7 +247,7 @@ pub(crate) async fn worker<D: DownloadDriver>(
                 // full path to final destination
                 let full_path = file_path.join(&download.node.name);
                 // this download is already complete
-                if full_path.exists() {
+                if try_exists(&full_path).await? {
                     // report as Inactive to help CLI track completion
                     message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
                     continue;
