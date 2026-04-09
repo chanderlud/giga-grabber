@@ -1,7 +1,6 @@
 #[cfg(feature = "gui")]
 use crate::app::build_app;
 use crate::cli::{CliArgs, run_cli};
-use crate::config::Config;
 use crate::mega_client::{MegaClient, Node, NodeKind};
 use clap::Parser;
 use log::{LevelFilter, error};
@@ -10,17 +9,8 @@ use std::collections::HashMap;
 #[cfg(feature = "gui")]
 use std::env;
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::time::Duration;
-use tokio::fs::{create_dir_all, rename};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
+use std::path::PathBuf;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep};
-use tokio::{select, spawn};
-use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "gui")]
 mod app;
@@ -38,8 +28,10 @@ mod resources;
 mod screens;
 #[cfg(feature = "gui")]
 mod styles;
+mod worker;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
+pub(crate) use worker::*;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Eq, clap::ValueEnum)]
 enum ProxyMode {
@@ -108,112 +100,6 @@ impl<'a> Iterator for FileIter<'a> {
         self.stack.extend(node.children.iter().rev());
         Some(node)
     }
-}
-
-#[derive(Debug, Clone)]
-struct Download {
-    node: Node,
-    file_path: PathBuf,
-    downloaded: Arc<AtomicUsize>,
-    start: Arc<RwLock<Option<Instant>>>,
-    stop: CancellationToken,
-    pause: Arc<Notify>,
-    paused: Arc<AtomicBool>,
-    retries: Arc<AtomicU32>,
-    last_tried_at: Arc<Mutex<Option<Instant>>>,
-}
-
-impl Download {
-    fn new(file: &MegaFile) -> Self {
-        Self {
-            node: file.node.clone(),
-            file_path: file.file_path.clone(),
-            downloaded: Default::default(),
-            start: Default::default(),
-            stop: Default::default(),
-            pause: Default::default(),
-            paused: Default::default(),
-            retries: Default::default(),
-            last_tried_at: Default::default(),
-        }
-    }
-}
-
-impl Download {
-    async fn start(&self) {
-        self.start.write().await.replace(Instant::now());
-    }
-
-    async fn set_retried(&self) {
-        self.retries.fetch_add(1, Ordering::Relaxed);
-        self.last_tried_at.lock().await.replace(Instant::now());
-    }
-
-    #[cfg(feature = "gui")]
-    fn progress(&self) -> f32 {
-        if self.node.size == 0 {
-            return 0.0;
-        }
-        (self.downloaded.load(Ordering::Relaxed) as f32 / self.node.size as f32).clamp(0.0, 1.0)
-    }
-
-    #[cfg(feature = "gui")]
-    fn speed(&self) -> f32 {
-        if self.paused.load(Ordering::Relaxed) {
-            return 0_f32;
-        }
-
-        if let Some(start) = self.start.blocking_read().as_ref() {
-            let elapsed = start.elapsed().as_secs_f32();
-            if elapsed <= 0.0 {
-                return 0_f32;
-            }
-            (self.downloaded.load(Ordering::Relaxed) as f32 / elapsed) / 1_048_576.0
-        } else {
-            0_f32
-        }
-    }
-
-    #[cfg(feature = "gui")]
-    fn cancel(&self) {
-        self.stop.cancel();
-    }
-
-    #[cfg(feature = "gui")]
-    fn pause(&self) {
-        self.pause.notify_one();
-    }
-
-    #[cfg(feature = "gui")]
-    fn resume(&self) {
-        self.paused.store(false, Ordering::Relaxed);
-        // the worker will be sitting on notified
-        self.pause.notify_one();
-    }
-
-    #[cfg(feature = "gui")]
-    fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Relaxed)
-    }
-}
-
-#[derive(Debug, Clone)]
-enum RunnerMessage {
-    /// notifies UI that this download has become active
-    Active(Download),
-    /// notifies the UI that this download if finished
-    Inactive(String),
-    /// notifies the UI when non-critical errors bubble up
-    Error(String),
-    /// may be emitted during shutdown
-    #[cfg(feature = "gui")]
-    Finished,
-}
-
-enum RetryDecision {
-    Wait,
-    TryNow,
-    GiveUp,
 }
 
 /// main entry point which runs the Iced UI
@@ -328,198 +214,4 @@ fn parse_files<'a>(
         .collect();
 
     MegaFile::new(node.clone(), path).add_children(children)
-}
-
-/// spawns worker tasks
-fn spawn_workers(
-    client: MegaClient,
-    config: Arc<Config>,
-    receiver: kanal::AsyncReceiver<Download>,
-    download_sender: kanal::AsyncSender<Download>,
-    message_sender: Sender<RunnerMessage>,
-    cancellation_token: CancellationToken,
-    workers: usize,
-) -> Vec<WorkerHandle> {
-    let budget = config.weighted_concurrency_budget();
-    let concurrency_sem = Arc::new(Semaphore::new(budget));
-
-    (0..workers)
-        .map(|_| {
-            spawn(worker(
-                client.clone(),
-                config.clone(),
-                receiver.clone(),
-                download_sender.clone(),
-                message_sender.clone(),
-                cancellation_token.clone(),
-                concurrency_sem.clone(),
-            ))
-        })
-        .collect()
-}
-
-/// downloads one file at a time from the channel
-/// may be canceled at any time by the token
-async fn worker(
-    client: MegaClient,
-    config: Arc<Config>,
-    receiver: kanal::AsyncReceiver<Download>,
-    download_sender: kanal::AsyncSender<Download>,
-    message_sender: Sender<RunnerMessage>,
-    cancellation_token: CancellationToken,
-    concurrency_sem: Arc<Semaphore>,
-) -> anyhow::Result<()> {
-    loop {
-        select! {
-            _ = cancellation_token.cancelled() => break,
-            Ok(download) = receiver.recv() => {
-                if download.stop.is_cancelled() {
-                    continue;
-                }
-
-                let since_last_retry = download.last_tried_at.lock().await.as_ref().map(|i| i.elapsed());
-                if let Some(elapsed) = since_last_retry {
-                    let retries = download.retries.load(Ordering::Relaxed);
-                    match retry_decision(elapsed, retries, &config) {
-                        RetryDecision::Wait => {
-                             // avoid hammering workers with the same task
-                            if download_sender.len() < config.max_workers_bounded() {
-                                sleep(Duration::from_millis(10)).await;
-                            }
-                            // requeue download
-                            download_sender.send(download).await?;
-                            continue;
-                        }
-                        RetryDecision::TryNow => {
-                            // proceed
-                        }
-                        RetryDecision::GiveUp => {
-                            // report the error to the UI
-                            message_sender.send(RunnerMessage::Error(
-                                format!("Max retries reached for {}", download.node.name)
-                            )).await?;
-                            // report as Inactive to help CLI track completion
-                            message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
-                            continue;
-                        }
-                    }
-                }
-
-                // create file path for the node
-                let file_path = Path::new("downloads").join(&download.file_path);
-                // create folders if needed
-                create_dir_all(&file_path).await?;
-
-                // full file path to partial file
-                let partial_path = file_path.join(format!("{}.partial", download.node.name));
-                // full path to final destination
-                let full_path = file_path.join(&download.node.name);
-                // this download is already complete
-                if full_path.exists() {
-                    // report as Inactive to help CLI track completion
-                    message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
-                    continue;
-                }
-
-                // figure out size & weight before downloading.
-                let size_bytes = download.node.size;
-                let weight = config.download_weight(size_bytes);
-
-                // acquire weighted permits, but be cancel-aware.
-                let _permits = {
-                    let sem = concurrency_sem.clone();
-                    select! {
-                        _ = cancellation_token.cancelled() => {
-                            break;
-                        }
-                        _ = download.stop.cancelled() => {
-                            continue;
-                        }
-                        res = sem.acquire_many_owned(weight as u32) => {
-                            res?
-                        }
-                    }
-                };
-
-                // mark the download as started
-                download.start().await;
-                // alert the UI of the change
-                message_sender.send(RunnerMessage::Active(download.clone())).await?;
-
-                select! {
-                    // abort entire worker when canceled
-                    _ = cancellation_token.cancelled() => break,
-                    // abort download when individually stopped
-                    _ = download.stop.cancelled() => (),
-                    result = client.download_file(&download, &partial_path) => {
-                        match result {
-                            // the partial file now contains the full contents of the download
-                            Ok(true) => {
-                                if let Err(error) = rename(partial_path, full_path).await {
-                                    error!("Error renaming file: {error:?}");
-                                }
-                            }
-                            // the download has been paused
-                            Ok(false) => {
-                                // wait for download to unpause
-                                // respect cancellation & stops
-                                select! {
-                                    _ = cancellation_token.cancelled() => break,
-                                    _ = download.stop.cancelled() => continue,
-                                    _ = download.pause.notified() => ()
-                                }
-                                // requeue download
-                                download_sender.send(download).await?;
-                                continue;
-                            }
-                            Err(error) => {
-                                error!("Error downloading file: {error:?}");
-                                // keep track of per-download retries
-                                download.set_retried().await;
-                                // report error to UI
-                                message_sender.send(RunnerMessage::Error(error.to_string())).await?;
-                                // requeue download
-                                download_sender.send(download).await?;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // in every case, we want the UI to mark this download inactive
-                message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?
-            }
-            else => break,
-        }
-    }
-
-    Ok(())
-}
-
-fn retry_decision(
-    elapsed_since_last_retry: Duration,
-    retries: u32,
-    config: &Config,
-) -> RetryDecision {
-    if retries >= config.max_retries {
-        return RetryDecision::GiveUp;
-    }
-
-    let exp = retries.min(31);
-    let factor = 1u32 << exp;
-
-    let base_delay = match config.min_retry_delay.checked_mul(factor) {
-        Some(d) => d,
-        None => config.max_retry_delay,
-    };
-
-    let required_delay = base_delay
-        .max(config.min_retry_delay)
-        .min(config.max_retry_delay);
-
-    if elapsed_since_last_retry >= required_delay {
-        RetryDecision::TryNow
-    } else {
-        RetryDecision::Wait
-    }
 }
