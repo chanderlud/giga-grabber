@@ -812,3 +812,313 @@ async fn pause_loop(pause_receiver: &mut watch::Receiver<PauseState>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aes::cipher::BlockEncrypt;
+    use cbc::Encryptor;
+    use cipher::{BlockEncryptMut, KeyIvInit};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{Duration, timeout};
+
+    fn ecb_encrypt_in_place(key: &[u8; 16], data: &mut [u8]) {
+        let aes = Aes128::new(key.into());
+        for block in data.chunks_mut(16) {
+            aes.encrypt_block(block.into());
+        }
+    }
+
+    fn encrypt_attrs(aes_key: &[u8; 16], name: &str) -> String {
+        let payload = format!(r#"{{"n":"{name}"}}"#);
+        let mut plain = b"MEGA".to_vec();
+        plain.extend_from_slice(payload.as_bytes());
+        let pad = (16 - (plain.len() % 16)) % 16;
+        plain.resize(plain.len() + pad, 0);
+
+        let mut cbc = Encryptor::<Aes128>::new(aes_key.into(), &Default::default());
+        for chunk in plain.chunks_exact_mut(16) {
+            cbc.encrypt_block_mut(chunk.into());
+        }
+        URL_SAFE_NO_PAD.encode(plain)
+    }
+
+    fn encrypted_key_b64(share_key: &[u8; 16], plain: &[u8]) -> String {
+        let mut encrypted = plain.to_vec();
+        ecb_encrypt_in_place(share_key, &mut encrypted);
+        URL_SAFE_NO_PAD.encode(encrypted)
+    }
+
+    fn build_file_key_material(aes_key: [u8; 16], aes_iv: [u8; 8], mac: [u8; 8]) -> Vec<u8> {
+        let mut second = [0u8; 16];
+        second[..8].copy_from_slice(&aes_iv);
+        second[8..].copy_from_slice(&mac);
+
+        let mut merged_first = [0u8; 16];
+        for (idx, byte) in merged_first.iter_mut().enumerate() {
+            *byte = aes_key[idx] ^ second[idx];
+        }
+
+        let mut material = Vec::with_capacity(32);
+        material.extend_from_slice(&merged_first);
+        material.extend_from_slice(&second);
+        material
+    }
+
+    fn make_key_field(handle: &str, share_key: &[u8; 16], plain: &[u8]) -> String {
+        format!("{handle}:{}", encrypted_key_b64(share_key, plain))
+    }
+
+    async fn spawn_single_cs_fixture(cs_response: String) -> (Url, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let addr = listener.local_addr().expect("fixture local addr");
+        let base_url = Url::parse(&format!("http://{addr}/")).expect("fixture base URL");
+
+        let task = tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+
+            let mut request = Vec::new();
+            let mut buf = [0u8; 2048];
+            let header_end = loop {
+                let read = match socket.read(&mut buf).await {
+                    Ok(0) => return,
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
+                request.extend_from_slice(&buf[..read]);
+                if let Some(idx) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break idx + 4;
+                }
+            };
+
+            let request_head = String::from_utf8_lossy(&request[..header_end]);
+            let mut content_length = 0usize;
+            for line in request_head.lines() {
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap_or(0);
+                }
+            }
+
+            let body_read = request.len().saturating_sub(header_end);
+            if content_length > body_read {
+                let mut remaining = content_length - body_read;
+                while remaining > 0 {
+                    let read = match socket.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    remaining = remaining.saturating_sub(read);
+                }
+            }
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                cs_response.len(),
+                cs_response
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+
+        (base_url, task)
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_exact_handle_success() {
+        let root = [0x11; 16];
+        let exact = [0x33; 16];
+        let expected = vec![0xAB; 16];
+        let key_field = format!(
+            "exact:{}",
+            encrypted_key_b64(&exact, &expected)
+        );
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("root".to_string(), root);
+        share_keys.insert("exact".to_string(), exact);
+
+        let mut seen = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+                seen.push(candidate);
+                ControlFlow::Break(())
+            });
+
+        assert!(has_candidate);
+        assert_eq!(seen, vec![expected]);
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_fallback_after_exact_failure() {
+        let root = [0x44; 16];
+        let exact = [0x55; 16];
+        let exact_plain = vec![0x10; 16];
+        let fallback_plain = vec![0x20; 16];
+        let key_field = format!(
+            "exact:{}/missing:{}",
+            encrypted_key_b64(&exact, &exact_plain),
+            encrypted_key_b64(&root, &fallback_plain)
+        );
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("root".to_string(), root);
+        share_keys.insert("exact".to_string(), exact);
+
+        let mut attempts = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+                let should_break = candidate == fallback_plain;
+                attempts.push(candidate);
+                if should_break {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            });
+
+        assert!(has_candidate);
+        let exact_idx = attempts
+            .iter()
+            .position(|candidate| *candidate == exact_plain)
+            .expect("expected exact-handle candidate attempt");
+        let fallback_idx = attempts
+            .iter()
+            .position(|candidate| *candidate == fallback_plain)
+            .expect("expected fallback candidate attempt");
+        assert!(
+            exact_idx < fallback_idx,
+            "expected exact-handle candidate attempt before fallback candidate attempt"
+        );
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_root_first_deterministic_fallback_order() {
+        let root = [0x01; 16];
+        let alpha = [0x02; 16];
+        let zeta = [0x03; 16];
+        let ciphertext = vec![0x7F; 16];
+        let key_field = format!("missing:{}", URL_SAFE_NO_PAD.encode(&ciphertext));
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("zeta".to_string(), zeta);
+        share_keys.insert("root".to_string(), root);
+        share_keys.insert("alpha".to_string(), alpha);
+
+        let mut expected = Vec::new();
+        for key in [root, alpha, zeta] {
+            let mut candidate = ciphertext.clone();
+            decrypt_ebc_in_place(&key, &mut candidate);
+            expected.push(candidate);
+        }
+
+        let mut observed = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+                observed.push(candidate);
+                ControlFlow::Continue(())
+            });
+
+        assert!(has_candidate);
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_deduplicates_candidates() {
+        let root = [0x0A; 16];
+        let plain = vec![0xCD; 16];
+        let encoded = encrypted_key_b64(&root, &plain);
+        let key_field = format!("root:{encoded}/root:{encoded}");
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("root".to_string(), root);
+
+        let mut observed = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+                observed.push(candidate);
+                ControlFlow::Continue(())
+            });
+
+        assert!(has_candidate);
+        assert_eq!(observed, vec![plain]);
+    }
+
+    #[tokio::test]
+    async fn fetch_public_folder_includes_and_skips_nodes_by_candidate_attr_results() {
+        let root_handle = "root123";
+        let root_key = [0xA1; 16];
+        let root_key_b64 = URL_SAFE_NO_PAD.encode(root_key);
+
+        let exact_file_aes = [0x31; 16];
+        let exact_file_key = build_file_key_material(exact_file_aes, [0x01; 8], [0x02; 8]);
+        let exact_node = json!({
+            "t": 0,
+            "a": encrypt_attrs(&exact_file_aes, "exact.bin"),
+            "h": "exact-node",
+            "p": root_handle,
+            "k": make_key_field("exact-node", &root_key, &exact_file_key),
+            "s": 7u64
+        });
+
+        let fallback_file_aes = [0x42; 16];
+        let fallback_file_key = build_file_key_material(fallback_file_aes, [0x03; 8], [0x04; 8]);
+        let fallback_node = json!({
+            "t": 0,
+            "a": encrypt_attrs(&fallback_file_aes, "fallback.bin"),
+            "h": "fallback-node",
+            "p": root_handle,
+            "k": make_key_field("missing-handle", &root_key, &fallback_file_key),
+            "s": 9u64
+        });
+
+        let bad_attr_file_key = build_file_key_material([0x77; 16], [0x05; 8], [0x06; 8]);
+        let bad_attr = URL_SAFE_NO_PAD.encode([0u8; 16]);
+        let skipped_node = json!({
+            "t": 0,
+            "a": bad_attr,
+            "h": "skipped-node",
+            "p": root_handle,
+            "k": make_key_field("skipped-node", &root_key, &bad_attr_file_key),
+            "s": 11u64
+        });
+
+        let cs_payload = json!([{
+            "f": vec![exact_node, fallback_node, skipped_node],
+            "ok": Vec::<BTreeMap<String, String>>::new()
+        }])
+        .to_string();
+
+        let (origin, fixture_task) = spawn_single_cs_fixture(cs_payload).await;
+        let client = MegaClient::with_origin(reqwest::Client::new(), origin);
+        let parsed = ParsedPublicLink {
+            kind: PublicLinkKind::Folder,
+            node_id: root_handle.to_string(),
+            node_key: URL_SAFE_NO_PAD.decode(root_key_b64).expect("decode root key"),
+        };
+
+        let nodes = client
+            .fetch_public_folder(parsed)
+            .await
+            .expect("fetch public folder");
+
+        assert!(nodes.contains_key("exact-node"));
+        assert!(nodes.contains_key("fallback-node"));
+        assert!(!nodes.contains_key("skipped-node"));
+        assert_eq!(nodes["exact-node"].name, "exact.bin");
+        assert_eq!(nodes["fallback-node"].name, "fallback.bin");
+
+        timeout(Duration::from_secs(2), fixture_task)
+            .await
+            .expect("fixture join timeout")
+            .expect("fixture join panic");
+    }
+}
