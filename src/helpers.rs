@@ -20,8 +20,10 @@ use iced::{Element, Length, Theme, stream};
 use reqwest::{Client, Proxy};
 #[cfg(feature = "gui")]
 use std::collections::HashMap;
+use std::time::Duration;
 #[cfg(feature = "gui")]
 use tokio::sync::mpsc::{Sender, channel};
+use tokio::time::{MissedTickBehavior, interval};
 #[cfg(feature = "gui")]
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -37,8 +39,8 @@ pub(crate) enum Message {
     Import(ImportMessage),
     /// choose files screen message
     ChooseFiles(ChooseFilesMessage),
-    /// received message from runner
-    Runner(RunnerMessage),
+    /// received batch of messages from runner
+    RunnerBatch(Vec<RunnerMessage>),
     /// runner subscription is ready, provides sender for workers
     RunnerReady(Sender<RunnerMessage>),
     /// navigate to a different route
@@ -195,20 +197,34 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
             return;
         }
 
+        let mut batch = Vec::new();
+        let mut flush_interval = interval(Duration::from_millis(100));
+        _ = flush_interval.tick();
+        flush_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         loop {
-            // Read next message from workers
-            let msg = if let Some(msg) = receiver.recv().await {
-                msg
-            } else {
-                RunnerMessage::Finished
-            };
+            tokio::select! {
+                maybe_msg = receiver.recv() => {
+                    let Some(msg) = maybe_msg else {
+                        batch.push(RunnerMessage::Finished);
+                        _ = output.send(Message::RunnerBatch(std::mem::take(&mut batch))).await;
+                        break;
+                    };
 
-            // Forward message to UI
-            let is_finished = matches!(msg, RunnerMessage::Finished)
-                | output.send(Message::Runner(msg)).await.is_err();
-
-            if is_finished {
-                break;
+                    let is_finished = matches!(msg, RunnerMessage::Finished);
+                    batch.push(msg);
+                    if is_finished {
+                        _ = output.send(Message::RunnerBatch(std::mem::take(&mut batch))).await;
+                        break;
+                    }
+                }
+                _ = flush_interval.tick() => {
+                    if !batch.is_empty()
+                        && output.send(Message::RunnerBatch(std::mem::take(&mut batch))).await.is_err()
+                    {
+                        break;
+                    }
+                }
             }
         }
     })

@@ -186,26 +186,10 @@ impl App {
                 self.runner_sender = Some(sender);
                 Task::none()
             }
-            Message::Runner(message) => {
-                match message {
-                    RunnerMessage::Active(download) => {
-                        // add download to active downloads
-                        self.home.add_active_download(download);
-                    }
-                    RunnerMessage::Inactive(id) => {
-                        self.home.remove_active_download(&id);
-
-                        // if there are no active downloads, stop the runner
-                        if !self.home.has_active_downloads() && self.download_receiver.is_empty() {
-                            self.stop_workers();
-                        }
-                    }
-                    RunnerMessage::Error(error) => {
-                        self.home.add_error(error);
-                    }
-                    RunnerMessage::Finished => (),
+            Message::RunnerBatch(messages) => {
+                for message in messages {
+                    self.handle_runner_message(message);
                 }
-
                 Task::none()
             }
             Message::Navigate(route) => {
@@ -381,6 +365,27 @@ impl App {
                 // nothing currently queued
                 Ok(None) => break,
             }
+        }
+    }
+
+    fn handle_runner_message(&mut self, message: RunnerMessage) {
+        match message {
+            RunnerMessage::Active(download) => {
+                // add download to active downloads
+                self.home.add_active_download(download);
+            }
+            RunnerMessage::Inactive(id) => {
+                self.home.remove_active_download(&id);
+
+                // if there are no active downloads, stop the runner
+                if !self.home.has_active_downloads() && self.download_receiver.is_empty() {
+                    self.stop_workers();
+                }
+            }
+            RunnerMessage::Error(error) => {
+                self.home.add_error(error);
+            }
+            RunnerMessage::Finished => (),
         }
     }
 }
