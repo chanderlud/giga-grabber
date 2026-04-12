@@ -472,6 +472,17 @@ impl MegaClient {
             share_keys.insert(file.handle.clone(), share_key);
         }
 
+        // Precompute a deterministic, root-first ordered list of share-key handles once,
+        // so the per-node helper doesn't re-sort on every call.
+        let mut share_key_handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
+        share_key_handles.sort_unstable();
+        if let Some(root_idx) = share_key_handles
+            .iter()
+            .position(|h| *h == parsed.node_id)
+        {
+            share_key_handles.swap(0, root_idx);
+        }
+
         for file in resp.nodes {
             let kind = match file.kind {
                 0 => NodeKind::File,
@@ -490,7 +501,7 @@ impl MegaClient {
             let has_candidate = decrypt_node_key_candidates(
                 file_key_str,
                 &share_keys,
-                &parsed.node_id,
+                &share_key_handles,
                 |mut file_key_bytes| {
                     let (aes_key, aes_iv) = if kind == NodeKind::File {
                         if file_key_bytes.len() != 32 {
@@ -697,7 +708,7 @@ fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
 fn decrypt_node_key_candidates<F>(
     key_field: &str,
     share_keys: &HashMap<String, [u8; 16]>,
-    root_handle: &str,
+    share_key_handles: &[&str],
     mut on_candidate: F,
 ) -> bool
 where
@@ -732,16 +743,7 @@ where
         }
     }
 
-    // Pass 2: deterministic fallback order (root share key first, then sorted handles).
-    let mut share_key_handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
-    share_key_handles.sort_unstable();
-    if let Some(root_idx) = share_key_handles
-        .iter()
-        .position(|handle| *handle == root_handle)
-    {
-        share_key_handles.swap(0, root_idx);
-    }
-
+    // Pass 2: use the precomputed deterministic handle order (root-first, then sorted).
     for (_, b64) in &entries {
         let decoded = match URL_SAFE_NO_PAD.decode(b64) {
             Ok(d) => d,
@@ -751,7 +753,7 @@ where
             continue;
         }
 
-        for handle in &share_key_handles {
+        for handle in share_key_handles {
             let Some(share_key) = share_keys.get(*handle) else {
                 continue;
             };
@@ -943,9 +945,16 @@ mod tests {
         share_keys.insert("root".to_string(), root);
         share_keys.insert("exact".to_string(), exact);
 
+        let mut share_key_handles: Vec<&str> =
+            share_keys.keys().map(String::as_str).collect();
+        share_key_handles.sort_unstable();
+        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
+            share_key_handles.swap(0, i);
+        }
+
         let mut seen = Vec::new();
         let has_candidate =
-            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
                 seen.push(candidate);
                 ControlFlow::Break(())
             });
@@ -970,9 +979,16 @@ mod tests {
         share_keys.insert("root".to_string(), root);
         share_keys.insert("exact".to_string(), exact);
 
+        let mut share_key_handles: Vec<&str> =
+            share_keys.keys().map(String::as_str).collect();
+        share_key_handles.sort_unstable();
+        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
+            share_key_handles.swap(0, i);
+        }
+
         let mut attempts = Vec::new();
         let has_candidate =
-            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
                 let should_break = candidate == fallback_plain;
                 attempts.push(candidate);
                 if should_break {
@@ -1017,9 +1033,16 @@ mod tests {
             expected.push(candidate);
         }
 
+        let mut share_key_handles: Vec<&str> =
+            share_keys.keys().map(String::as_str).collect();
+        share_key_handles.sort_unstable();
+        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
+            share_key_handles.swap(0, i);
+        }
+
         let mut observed = Vec::new();
         let has_candidate =
-            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
                 observed.push(candidate);
                 ControlFlow::Continue(())
             });
@@ -1038,9 +1061,16 @@ mod tests {
         let mut share_keys = HashMap::new();
         share_keys.insert("root".to_string(), root);
 
+        let mut share_key_handles: Vec<&str> =
+            share_keys.keys().map(String::as_str).collect();
+        share_key_handles.sort_unstable();
+        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
+            share_key_handles.swap(0, i);
+        }
+
         let mut observed = Vec::new();
         let has_candidate =
-            decrypt_node_key_candidates(&key_field, &share_keys, "root", |candidate| {
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
                 observed.push(candidate);
                 ControlFlow::Continue(())
             });
