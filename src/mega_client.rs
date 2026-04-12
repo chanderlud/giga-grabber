@@ -476,10 +476,7 @@ impl MegaClient {
         // so the per-node helper doesn't re-sort on every call.
         let mut share_key_handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
         share_key_handles.sort_unstable();
-        if let Some(root_idx) = share_key_handles
-            .iter()
-            .position(|h| *h == parsed.node_id)
-        {
+        if let Some(root_idx) = share_key_handles.iter().position(|h| *h == parsed.node_id) {
             share_key_handles.swap(0, root_idx);
         }
 
