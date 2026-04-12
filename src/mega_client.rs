@@ -13,8 +13,8 @@ use log::error;
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::ops::ControlFlow;
 use std::io::SeekFrom;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -540,7 +540,7 @@ impl MegaClient {
                 if let Some(error) = last_attr_error {
                     error!(
                         "failed to decrypt attributes for {}: {:?}",
-                        file.attr, error
+                        file.handle, error
                     );
                 }
                 continue;
@@ -937,10 +937,7 @@ mod tests {
         let root = [0x11; 16];
         let exact = [0x33; 16];
         let expected = vec![0xAB; 16];
-        let key_field = format!(
-            "exact:{}",
-            encrypted_key_b64(&exact, &expected)
-        );
+        let key_field = format!("exact:{}", encrypted_key_b64(&exact, &expected));
 
         let mut share_keys = HashMap::new();
         share_keys.insert("root".to_string(), root);
@@ -1102,7 +1099,9 @@ mod tests {
         let parsed = ParsedPublicLink {
             kind: PublicLinkKind::Folder,
             node_id: root_handle.to_string(),
-            node_key: URL_SAFE_NO_PAD.decode(root_key_b64).expect("decode root key"),
+            node_key: URL_SAFE_NO_PAD
+                .decode(root_key_b64)
+                .expect("decode root key"),
         };
 
         let nodes = client
