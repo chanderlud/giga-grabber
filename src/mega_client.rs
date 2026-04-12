@@ -834,6 +834,19 @@ mod tests {
         }
     }
 
+    /// Build a root-first, deterministically ordered list of share-key handles for tests.
+    fn ordered_share_key_handles<'a>(
+        share_keys: &'a HashMap<String, [u8; 16]>,
+        root_handle: &str,
+    ) -> Vec<&'a str> {
+        let mut handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
+        handles.sort_unstable();
+        if let Some(i) = handles.iter().position(|h| *h == root_handle) {
+            handles.swap(0, i);
+        }
+        handles
+    }
+
     fn encrypt_attrs(aes_key: &[u8; 16], name: &str) -> String {
         let payload = format!(r#"{{"n":"{name}"}}"#);
         let mut plain = b"MEGA".to_vec();
@@ -945,12 +958,7 @@ mod tests {
         share_keys.insert("root".to_string(), root);
         share_keys.insert("exact".to_string(), exact);
 
-        let mut share_key_handles: Vec<&str> =
-            share_keys.keys().map(String::as_str).collect();
-        share_key_handles.sort_unstable();
-        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
-            share_key_handles.swap(0, i);
-        }
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
 
         let mut seen = Vec::new();
         let has_candidate =
@@ -979,12 +987,7 @@ mod tests {
         share_keys.insert("root".to_string(), root);
         share_keys.insert("exact".to_string(), exact);
 
-        let mut share_key_handles: Vec<&str> =
-            share_keys.keys().map(String::as_str).collect();
-        share_key_handles.sort_unstable();
-        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
-            share_key_handles.swap(0, i);
-        }
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
 
         let mut attempts = Vec::new();
         let has_candidate =
@@ -1033,12 +1036,7 @@ mod tests {
             expected.push(candidate);
         }
 
-        let mut share_key_handles: Vec<&str> =
-            share_keys.keys().map(String::as_str).collect();
-        share_key_handles.sort_unstable();
-        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
-            share_key_handles.swap(0, i);
-        }
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
 
         let mut observed = Vec::new();
         let has_candidate =
@@ -1061,12 +1059,7 @@ mod tests {
         let mut share_keys = HashMap::new();
         share_keys.insert("root".to_string(), root);
 
-        let mut share_key_handles: Vec<&str> =
-            share_keys.keys().map(String::as_str).collect();
-        share_key_handles.sort_unstable();
-        if let Some(i) = share_key_handles.iter().position(|h| *h == "root") {
-            share_key_handles.swap(0, i);
-        }
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
 
         let mut observed = Vec::new();
         let has_candidate =
