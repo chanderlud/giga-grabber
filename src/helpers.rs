@@ -20,8 +20,10 @@ use iced::{Element, Length, Theme, stream};
 use reqwest::{Client, Proxy};
 #[cfg(feature = "gui")]
 use std::collections::HashMap;
+use std::time::Duration;
 #[cfg(feature = "gui")]
 use tokio::sync::mpsc::{Sender, channel};
+use tokio::time::{MissedTickBehavior, interval};
 #[cfg(feature = "gui")]
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -196,7 +198,9 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
         }
 
         let mut batch = Vec::new();
-        let mut flush_interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        let mut flush_interval = interval(Duration::from_millis(100));
+        _ = flush_interval.tick();
+        flush_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -210,6 +214,7 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
                     let is_finished = matches!(msg, RunnerMessage::Finished);
                     batch.push(msg);
                     if is_finished {
+                        _ = output.send(Message::RunnerBatch(std::mem::take(&mut batch))).await;
                         break;
                     }
                 }
