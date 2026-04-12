@@ -9,10 +9,12 @@ use cipher::StreamCipherSeek;
 use cipher::{BlockDecrypt, BlockDecryptMut, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use futures::StreamExt;
+use log::error;
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -430,13 +432,59 @@ impl MegaClient {
 
         let mut nodes_map: HashMap<String, Node> = HashMap::new();
 
-        // Root folder key used to decrypt child keys.
-        let root_key = parsed.node_key;
+        let root_key: [u8; 16] = parsed
+            .node_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("unexpected folder key size after validation"))?;
+
+        let mut share_keys: HashMap<String, [u8; 16]> = HashMap::new();
+        share_keys.insert(parsed.node_id.clone(), root_key);
+
+        for entry in &resp.ok {
+            let mut decoded = match URL_SAFE_NO_PAD.decode(&entry.key) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            if decoded.len() != 16 {
+                continue;
+            }
+            decrypt_ebc_in_place(&root_key, &mut decoded);
+            let mut share_key = [0u8; 16];
+            share_key.copy_from_slice(&decoded);
+            share_keys.insert(entry.handle.clone(), share_key);
+        }
+
+        for file in &resp.nodes {
+            let Some(sk) = file.sharing_key.as_deref() else {
+                continue;
+            };
+            let mut decoded = match URL_SAFE_NO_PAD.decode(sk) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            if decoded.len() != 16 {
+                continue;
+            }
+            decrypt_ebc_in_place(&root_key, &mut decoded);
+            let mut share_key = [0u8; 16];
+            share_key.copy_from_slice(&decoded);
+            share_keys.insert(file.handle.clone(), share_key);
+        }
+
+        // Precompute a deterministic, root-first ordered list of share-key handles once,
+        // so the per-node helper doesn't re-sort on every call.
+        let mut share_key_handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
+        share_key_handles.sort_unstable();
+        if let Some(root_idx) = share_key_handles.iter().position(|h| *h == parsed.node_id) {
+            share_key_handles.swap(0, root_idx);
+        }
 
         for file in resp.nodes {
             let kind = match file.kind {
                 0 => NodeKind::File,
                 1 => NodeKind::Folder,
+                2..=4 => continue,
                 _ => continue, // skip unknown types
             };
 
@@ -445,69 +493,71 @@ impl MegaClient {
                 continue;
             };
 
-            // Keys are like "userhandle:base64key[/userhandle:base64key...]"
-            let mut file_key_bytes_opt = None;
-            for entry in file_key_str.split('/') {
-                let (_, base64_part) = match entry.split_once(':') {
-                    Some(parts) => parts,
-                    None => continue,
-                };
+            let mut node_material: Option<([u8; 16], Option<[u8; 8]>, String)> = None;
+            let mut last_attr_error = None;
+            let has_candidate = decrypt_node_key_candidates(
+                file_key_str,
+                &share_keys,
+                &share_key_handles,
+                |mut file_key_bytes| {
+                    let (aes_key, aes_iv) = if kind == NodeKind::File {
+                        if file_key_bytes.len() != 32 {
+                            return ControlFlow::Continue(());
+                        }
+                        // 32 bytes: [16 key][8 iv][8 mac]
+                        unmerge_key_mac(&mut file_key_bytes);
 
-                if base64_part.len() >= 44 {
-                    // RSA-based key; ignoring for this barebones client.
-                    continue;
-                }
+                        let (key_part, rest) = file_key_bytes.split_at(16);
+                        let (iv_part, _mac_part) = rest.split_at(8);
 
-                let mut decoded = match URL_SAFE_NO_PAD.decode(base64_part) {
-                    Ok(d) => d,
-                    Err(_) => continue,
-                };
+                        let mut aes_key = [0u8; 16];
+                        aes_key.copy_from_slice(key_part);
 
-                // File -> 32 bytes, folder -> 16 bytes
-                if (kind == NodeKind::File && decoded.len() != 32)
-                    || (kind == NodeKind::Folder && decoded.len() != 16)
-                {
-                    continue;
-                }
+                        let mut aes_iv = [0u8; 8];
+                        aes_iv.copy_from_slice(iv_part);
 
-                // Decrypt with root folder key using AES-ECB.
-                decrypt_ebc_in_place(&root_key, &mut decoded);
-                file_key_bytes_opt = Some(decoded);
-                break;
+                        (aes_key, Some(aes_iv))
+                    } else {
+                        if file_key_bytes.len() != 16 {
+                            return ControlFlow::Continue(());
+                        }
+                        // 16 bytes: just AES key, no IV.
+                        let mut aes_key = [0u8; 16];
+                        aes_key.copy_from_slice(&file_key_bytes[..16]);
+                        (aes_key, None)
+                    };
+
+                    match decrypt_attrs(&aes_key, &file.attr) {
+                        Ok(name) => {
+                            node_material = Some((aes_key, aes_iv, name));
+                            ControlFlow::Break(())
+                        }
+                        Err(error) => {
+                            last_attr_error = Some(error);
+                            ControlFlow::Continue(())
+                        }
+                    }
+                },
+            );
+
+            if !has_candidate {
+                continue;
             }
 
-            let mut file_key_bytes = match file_key_bytes_opt {
-                Some(k) => k,
-                None => continue,
+            let Some((aes_key, aes_iv, name)) = node_material else {
+                if let Some(error) = last_attr_error {
+                    error!(
+                        "failed to decrypt attributes for {}: {:?}",
+                        file.handle, error
+                    );
+                }
+                continue;
             };
-
-            let (aes_key, aes_iv) = if kind == NodeKind::File {
-                // 32 bytes: [16 key][8 iv][8 mac]
-                unmerge_key_mac(&mut file_key_bytes);
-
-                let (key_part, rest) = file_key_bytes.split_at(16);
-                let (iv_part, _mac_part) = rest.split_at(8);
-
-                let mut aes_key = [0u8; 16];
-                aes_key.copy_from_slice(key_part);
-
-                let mut aes_iv = [0u8; 8];
-                aes_iv.copy_from_slice(iv_part);
-
-                (aes_key, Some(aes_iv))
-            } else {
-                // 16 bytes: just AES key, no IV.
-                let mut aes_key = [0u8; 16];
-                aes_key.copy_from_slice(&file_key_bytes[..16]);
-                (aes_key, None)
-            };
-
-            let name = decrypt_attrs(&aes_key, &file.attr)?;
 
             let node = Node {
                 name,
                 handle: file.handle.clone(),
-                parent: Some(file.parent),
+                parent: file.parent,
                 kind,
                 size: file.size.unwrap_or(0),
                 aes_key,
@@ -574,12 +624,22 @@ struct FileNode {
     attr: String,
     #[serde(rename = "h")]
     handle: String,
-    #[serde(rename = "p")]
-    parent: String,
+    #[serde(rename = "p", default)]
+    parent: Option<String>,
     #[serde(rename = "k")]
     key: Option<String>,
     #[serde(rename = "s")]
     size: Option<u64>,
+    #[serde(rename = "sk")]
+    sharing_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedKey {
+    #[serde(rename = "h")]
+    handle: String,
+    #[serde(rename = "k")]
+    key: String,
 }
 
 /// Response for FetchNodes
@@ -587,6 +647,8 @@ struct FileNode {
 struct FetchNodesResponse {
     #[serde(rename = "f")]
     nodes: Vec<FileNode>,
+    #[serde(default, rename = "ok")]
+    ok: Vec<SharedKey>,
 }
 
 /// Response for Download
@@ -640,6 +702,72 @@ fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
     }
 }
 
+fn decrypt_node_key_candidates<F>(
+    key_field: &str,
+    share_keys: &HashMap<String, [u8; 16]>,
+    share_key_handles: &[&str],
+    mut on_candidate: F,
+) -> bool
+where
+    F: FnMut(Vec<u8>) -> ControlFlow<()>,
+{
+    let entries: Vec<(&str, &str)> = key_field
+        .split('/')
+        .filter_map(|entry| entry.split_once(':'))
+        .collect();
+
+    let mut seen = HashSet::new();
+    let mut emitted_any = false;
+
+    // Pass 1: exact handle -> share key match.
+    for (handle, b64) in &entries {
+        let Some(share_key) = share_keys.get(*handle) else {
+            continue;
+        };
+        let mut decoded = match URL_SAFE_NO_PAD.decode(*b64) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if decoded.len() != 16 && decoded.len() != 32 {
+            continue;
+        }
+        decrypt_ebc_in_place(share_key, &mut decoded);
+        if seen.insert(decoded.clone()) {
+            emitted_any = true;
+            if on_candidate(decoded).is_break() {
+                return true;
+            }
+        }
+    }
+
+    // Pass 2: use the precomputed deterministic handle order (root-first, then sorted).
+    for (_, b64) in &entries {
+        let decoded = match URL_SAFE_NO_PAD.decode(b64) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if decoded.len() != 16 && decoded.len() != 32 {
+            continue;
+        }
+
+        for handle in share_key_handles {
+            let Some(share_key) = share_keys.get(*handle) else {
+                continue;
+            };
+            let mut candidate = decoded.clone();
+            decrypt_ebc_in_place(share_key, &mut candidate);
+            if seen.insert(candidate.clone()) {
+                emitted_any = true;
+                if on_candidate(candidate).is_break() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    emitted_any
+}
+
 /// XOR first 16 bytes with second 16 bytes (undo merged key+MAC)
 fn unmerge_key_mac(key: &mut [u8]) {
     let (fst, snd) = key.split_at_mut(16);
@@ -681,5 +809,335 @@ async fn pause_loop(pause_receiver: &mut watch::Receiver<PauseState>) {
         if pause_receiver.changed().await.is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aes::cipher::BlockEncrypt;
+    use cbc::Encryptor;
+    use cipher::{BlockEncryptMut, KeyIvInit};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{Duration, timeout};
+
+    fn ecb_encrypt_in_place(key: &[u8; 16], data: &mut [u8]) {
+        let aes = Aes128::new(key.into());
+        for block in data.chunks_mut(16) {
+            aes.encrypt_block(block.into());
+        }
+    }
+
+    /// Build a root-first, deterministically ordered list of share-key handles for tests.
+    fn ordered_share_key_handles<'a>(
+        share_keys: &'a HashMap<String, [u8; 16]>,
+        root_handle: &str,
+    ) -> Vec<&'a str> {
+        let mut handles: Vec<&str> = share_keys.keys().map(String::as_str).collect();
+        handles.sort_unstable();
+        if let Some(i) = handles.iter().position(|h| *h == root_handle) {
+            handles.swap(0, i);
+        }
+        handles
+    }
+
+    fn encrypt_attrs(aes_key: &[u8; 16], name: &str) -> String {
+        let payload = format!(r#"{{"n":"{name}"}}"#);
+        let mut plain = b"MEGA".to_vec();
+        plain.extend_from_slice(payload.as_bytes());
+        let pad = (16 - (plain.len() % 16)) % 16;
+        plain.resize(plain.len() + pad, 0);
+
+        let mut cbc = Encryptor::<Aes128>::new(aes_key.into(), &Default::default());
+        for chunk in plain.chunks_exact_mut(16) {
+            cbc.encrypt_block_mut(chunk.into());
+        }
+        URL_SAFE_NO_PAD.encode(plain)
+    }
+
+    fn encrypted_key_b64(share_key: &[u8; 16], plain: &[u8]) -> String {
+        let mut encrypted = plain.to_vec();
+        ecb_encrypt_in_place(share_key, &mut encrypted);
+        URL_SAFE_NO_PAD.encode(encrypted)
+    }
+
+    fn build_file_key_material(aes_key: [u8; 16], aes_iv: [u8; 8], mac: [u8; 8]) -> Vec<u8> {
+        let mut second = [0u8; 16];
+        second[..8].copy_from_slice(&aes_iv);
+        second[8..].copy_from_slice(&mac);
+
+        let mut merged_first = [0u8; 16];
+        for (idx, byte) in merged_first.iter_mut().enumerate() {
+            *byte = aes_key[idx] ^ second[idx];
+        }
+
+        let mut material = Vec::with_capacity(32);
+        material.extend_from_slice(&merged_first);
+        material.extend_from_slice(&second);
+        material
+    }
+
+    fn make_key_field(handle: &str, share_key: &[u8; 16], plain: &[u8]) -> String {
+        format!("{handle}:{}", encrypted_key_b64(share_key, plain))
+    }
+
+    async fn spawn_single_cs_fixture(cs_response: String) -> (Url, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let addr = listener.local_addr().expect("fixture local addr");
+        let base_url = Url::parse(&format!("http://{addr}/")).expect("fixture base URL");
+
+        let task = tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+
+            let mut request = Vec::new();
+            let mut buf = [0u8; 2048];
+            let header_end = loop {
+                let read = match socket.read(&mut buf).await {
+                    Ok(0) => return,
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
+                request.extend_from_slice(&buf[..read]);
+                if let Some(idx) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break idx + 4;
+                }
+            };
+
+            let request_head = String::from_utf8_lossy(&request[..header_end]);
+            let mut content_length = 0usize;
+            for line in request_head.lines() {
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap_or(0);
+                }
+            }
+
+            let body_read = request.len().saturating_sub(header_end);
+            if content_length > body_read {
+                let mut remaining = content_length - body_read;
+                while remaining > 0 {
+                    let read = match socket.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    remaining = remaining.saturating_sub(read);
+                }
+            }
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                cs_response.len(),
+                cs_response
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+
+        (base_url, task)
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_exact_handle_success() {
+        let root = [0x11; 16];
+        let exact = [0x33; 16];
+        let expected = vec![0xAB; 16];
+        let key_field = format!("exact:{}", encrypted_key_b64(&exact, &expected));
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("root".to_string(), root);
+        share_keys.insert("exact".to_string(), exact);
+
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
+
+        let mut seen = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
+                seen.push(candidate);
+                ControlFlow::Break(())
+            });
+
+        assert!(has_candidate);
+        assert_eq!(seen, vec![expected]);
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_fallback_after_exact_failure() {
+        let root = [0x44; 16];
+        let exact = [0x55; 16];
+        let exact_plain = vec![0x10; 16];
+        let fallback_plain = vec![0x20; 16];
+        let key_field = format!(
+            "exact:{}/missing:{}",
+            encrypted_key_b64(&exact, &exact_plain),
+            encrypted_key_b64(&root, &fallback_plain)
+        );
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("root".to_string(), root);
+        share_keys.insert("exact".to_string(), exact);
+
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
+
+        let mut attempts = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
+                let should_break = candidate == fallback_plain;
+                attempts.push(candidate);
+                if should_break {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            });
+
+        assert!(has_candidate);
+        let exact_idx = attempts
+            .iter()
+            .position(|candidate| *candidate == exact_plain)
+            .expect("expected exact-handle candidate attempt");
+        let fallback_idx = attempts
+            .iter()
+            .position(|candidate| *candidate == fallback_plain)
+            .expect("expected fallback candidate attempt");
+        assert!(
+            exact_idx < fallback_idx,
+            "expected exact-handle candidate attempt before fallback candidate attempt"
+        );
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_root_first_deterministic_fallback_order() {
+        let root = [0x01; 16];
+        let alpha = [0x02; 16];
+        let zeta = [0x03; 16];
+        let ciphertext = vec![0x7F; 16];
+        let key_field = format!("missing:{}", URL_SAFE_NO_PAD.encode(&ciphertext));
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("zeta".to_string(), zeta);
+        share_keys.insert("root".to_string(), root);
+        share_keys.insert("alpha".to_string(), alpha);
+
+        let mut expected = Vec::new();
+        for key in [root, alpha, zeta] {
+            let mut candidate = ciphertext.clone();
+            decrypt_ebc_in_place(&key, &mut candidate);
+            expected.push(candidate);
+        }
+
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
+
+        let mut observed = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
+                observed.push(candidate);
+                ControlFlow::Continue(())
+            });
+
+        assert!(has_candidate);
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn decrypt_node_key_candidates_deduplicates_candidates() {
+        let root = [0x0A; 16];
+        let plain = vec![0xCD; 16];
+        let encoded = encrypted_key_b64(&root, &plain);
+        let key_field = format!("root:{encoded}/root:{encoded}");
+
+        let mut share_keys = HashMap::new();
+        share_keys.insert("root".to_string(), root);
+
+        let share_key_handles = ordered_share_key_handles(&share_keys, "root");
+
+        let mut observed = Vec::new();
+        let has_candidate =
+            decrypt_node_key_candidates(&key_field, &share_keys, &share_key_handles, |candidate| {
+                observed.push(candidate);
+                ControlFlow::Continue(())
+            });
+
+        assert!(has_candidate);
+        assert_eq!(observed, vec![plain]);
+    }
+
+    #[tokio::test]
+    async fn fetch_public_folder_includes_and_skips_nodes_by_candidate_attr_results() {
+        let root_handle = "root123";
+        let root_key = [0xA1; 16];
+        let root_key_b64 = URL_SAFE_NO_PAD.encode(root_key);
+
+        let exact_file_aes = [0x31; 16];
+        let exact_file_key = build_file_key_material(exact_file_aes, [0x01; 8], [0x02; 8]);
+        let exact_node = json!({
+            "t": 0,
+            "a": encrypt_attrs(&exact_file_aes, "exact.bin"),
+            "h": "exact-node",
+            "p": root_handle,
+            "k": make_key_field("exact-node", &root_key, &exact_file_key),
+            "s": 7u64
+        });
+
+        let fallback_file_aes = [0x42; 16];
+        let fallback_file_key = build_file_key_material(fallback_file_aes, [0x03; 8], [0x04; 8]);
+        let fallback_node = json!({
+            "t": 0,
+            "a": encrypt_attrs(&fallback_file_aes, "fallback.bin"),
+            "h": "fallback-node",
+            "p": root_handle,
+            "k": make_key_field("missing-handle", &root_key, &fallback_file_key),
+            "s": 9u64
+        });
+
+        let bad_attr_file_key = build_file_key_material([0x77; 16], [0x05; 8], [0x06; 8]);
+        let bad_attr = URL_SAFE_NO_PAD.encode([0u8; 16]);
+        let skipped_node = json!({
+            "t": 0,
+            "a": bad_attr,
+            "h": "skipped-node",
+            "p": root_handle,
+            "k": make_key_field("skipped-node", &root_key, &bad_attr_file_key),
+            "s": 11u64
+        });
+
+        let cs_payload = json!([{
+            "f": vec![exact_node, fallback_node, skipped_node],
+            "ok": Vec::<BTreeMap<String, String>>::new()
+        }])
+        .to_string();
+
+        let (origin, fixture_task) = spawn_single_cs_fixture(cs_payload).await;
+        let client = MegaClient::with_origin(reqwest::Client::new(), origin);
+        let parsed = ParsedPublicLink {
+            kind: PublicLinkKind::Folder,
+            node_id: root_handle.to_string(),
+            node_key: URL_SAFE_NO_PAD
+                .decode(root_key_b64)
+                .expect("decode root key"),
+        };
+
+        let nodes = client
+            .fetch_public_folder(parsed)
+            .await
+            .expect("fetch public folder");
+
+        assert!(nodes.contains_key("exact-node"));
+        assert!(nodes.contains_key("fallback-node"));
+        assert!(!nodes.contains_key("skipped-node"));
+        assert_eq!(nodes["exact-node"].name, "exact.bin");
+        assert_eq!(nodes["fallback-node"].name, "fallback.bin");
+
+        timeout(Duration::from_secs(2), fixture_task)
+            .await
+            .expect("fixture join timeout")
+            .expect("fixture join panic");
     }
 }
