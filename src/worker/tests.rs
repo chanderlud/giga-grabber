@@ -6,7 +6,7 @@ use crate::mega_client::{MegaClient, Node};
 use aes::Aes128;
 use cipher::{KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -56,6 +56,19 @@ async fn wait_for_inactive(receiver: &mut Receiver<RunnerMessage>, expected: usi
             inactive += 1;
         }
     }
+}
+
+async fn wait_for_driver_calls(driver: &FakeDriver, expected: usize) {
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if driver.call_count() >= expected {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("driver call count timeout");
 }
 
 fn encrypt_ctr_zero_key(payload: &[u8]) -> Vec<u8> {
@@ -657,6 +670,115 @@ async fn test_pause_then_cancel() {
 }
 
 #[tokio::test]
+async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_active() {
+    let temp = TempDir::new().expect("temp dir");
+    let requeued = make_download("pause-requeue-cancel.bin", 1024, temp.path().to_path_buf());
+    let blocker = make_download("pause-requeue-blocker.bin", 1024, temp.path().to_path_buf());
+    let requeued_handle = requeued.node.handle.clone();
+    let blocker_handle = blocker.node.handle.clone();
+    let driver = make_driver(vec![DriverAction::PauseThenQuickResume, DriverAction::Hang]);
+    let (download_sender, download_receiver) = kanal::unbounded_async();
+    let (message_sender, mut message_receiver) = channel(64);
+    let cancel = CancellationToken::new();
+    let config = Arc::new(Config::default());
+    let workers = spawn_workers(
+        driver.clone(),
+        config,
+        download_receiver,
+        download_sender.clone(),
+        message_sender,
+        cancel.clone(),
+        1,
+    );
+
+    download_sender
+        .send(requeued.clone())
+        .await
+        .expect("enqueue requeued download");
+    download_sender
+        .send(blocker.clone())
+        .await
+        .expect("enqueue blocker download");
+
+    let mut active_handles = HashSet::new();
+    let mut requeued_inactive = 0usize;
+    let mut blocker_inactive = 0usize;
+    let mut saw_requeued_active = false;
+    let mut saw_blocker_active = false;
+
+    while !(saw_requeued_active && saw_blocker_active) {
+        match next_message(&mut message_receiver).await {
+            RunnerMessage::Active(download) => {
+                if download.node.handle == requeued_handle {
+                    saw_requeued_active = true;
+                }
+                if download.node.handle == blocker_handle {
+                    saw_blocker_active = true;
+                }
+                active_handles.insert(download.node.handle);
+            }
+            RunnerMessage::Inactive(handle) => {
+                if handle == requeued_handle {
+                    requeued_inactive += 1;
+                } else if handle == blocker_handle {
+                    blocker_inactive += 1;
+                }
+                active_handles.remove(&handle);
+            }
+            RunnerMessage::Error(_) => (),
+            #[cfg(feature = "gui")]
+            RunnerMessage::Finished => (),
+        }
+    }
+
+    wait_for_driver_calls(&driver, 2).await;
+    requeued.stop.cancel();
+    blocker.stop.cancel();
+
+    timeout(Duration::from_secs(3), async {
+        while requeued_inactive < 1 || blocker_inactive < 1 {
+            match next_message(&mut message_receiver).await {
+                RunnerMessage::Active(download) => {
+                    active_handles.insert(download.node.handle);
+                }
+                RunnerMessage::Inactive(handle) => {
+                    if handle == requeued_handle {
+                        requeued_inactive += 1;
+                    } else if handle == blocker_handle {
+                        blocker_inactive += 1;
+                    }
+                    active_handles.remove(&handle);
+                }
+                RunnerMessage::Error(_) => (),
+                #[cfg(feature = "gui")]
+                RunnerMessage::Finished => (),
+            }
+        }
+    })
+    .await
+    .expect("expected inactive messages for canceled downloads");
+
+    assert_eq!(requeued_inactive, 1);
+    assert!(
+        !active_handles.contains(&requeued_handle),
+        "requeued task remained active after cancel"
+    );
+    assert!(
+        !active_handles.contains(&blocker_handle),
+        "blocker task remained active after cancel"
+    );
+    assert!(
+        active_handles.is_empty(),
+        "all active entries should be cleared after cancel handling"
+    );
+
+    cancel.cancel();
+    for worker in workers {
+        worker.await.expect("worker join").expect("worker result");
+    }
+}
+
+#[tokio::test]
 async fn test_retry_on_error() {
     let temp = TempDir::new().expect("temp dir");
     let download = make_download("retry-success.bin", 1024, temp.path().to_path_buf());
@@ -692,6 +814,122 @@ async fn test_retry_on_error() {
         .expect("enqueue download");
     wait_for_inactive(&mut message_receiver, 1).await;
     assert_eq!(driver.call_count(), 3);
+
+    cancel.cancel();
+    for worker in workers {
+        worker.await.expect("worker join").expect("worker result");
+    }
+}
+
+#[tokio::test]
+async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_active() {
+    let temp = TempDir::new().expect("temp dir");
+    let requeued = make_download("retry-requeue-cancel.bin", 1024, temp.path().to_path_buf());
+    let blocker = make_download("retry-requeue-blocker.bin", 1024, temp.path().to_path_buf());
+    let requeued_handle = requeued.node.handle.clone();
+    let blocker_handle = blocker.node.handle.clone();
+    let driver = make_driver(vec![
+        DriverAction::Fail("retry me".to_string()),
+        DriverAction::Hang,
+    ]);
+    let (download_sender, download_receiver) = kanal::unbounded_async();
+    let (message_sender, mut message_receiver) = channel(64);
+    let cancel = CancellationToken::new();
+    let config = Arc::new(Config {
+        min_retry_delay: Duration::ZERO,
+        max_retry_delay: Duration::ZERO,
+        ..Default::default()
+    });
+    let workers = spawn_workers(
+        driver.clone(),
+        config,
+        download_receiver,
+        download_sender.clone(),
+        message_sender,
+        cancel.clone(),
+        1,
+    );
+
+    download_sender
+        .send(requeued.clone())
+        .await
+        .expect("enqueue requeued download");
+    download_sender
+        .send(blocker.clone())
+        .await
+        .expect("enqueue blocker download");
+
+    let mut active_handles = HashSet::new();
+    let mut requeued_inactive = 0usize;
+    let mut blocker_inactive = 0usize;
+    let mut saw_requeued_active = false;
+    let mut saw_blocker_active = false;
+
+    while !(saw_requeued_active && saw_blocker_active) {
+        match next_message(&mut message_receiver).await {
+            RunnerMessage::Active(download) => {
+                if download.node.handle == requeued_handle {
+                    saw_requeued_active = true;
+                }
+                if download.node.handle == blocker_handle {
+                    saw_blocker_active = true;
+                }
+                active_handles.insert(download.node.handle);
+            }
+            RunnerMessage::Inactive(handle) => {
+                if handle == requeued_handle {
+                    requeued_inactive += 1;
+                } else if handle == blocker_handle {
+                    blocker_inactive += 1;
+                }
+                active_handles.remove(&handle);
+            }
+            RunnerMessage::Error(_) => (),
+            #[cfg(feature = "gui")]
+            RunnerMessage::Finished => (),
+        }
+    }
+
+    wait_for_driver_calls(&driver, 2).await;
+    requeued.stop.cancel();
+    blocker.stop.cancel();
+
+    timeout(Duration::from_secs(3), async {
+        while requeued_inactive < 1 || blocker_inactive < 1 {
+            match next_message(&mut message_receiver).await {
+                RunnerMessage::Active(download) => {
+                    active_handles.insert(download.node.handle);
+                }
+                RunnerMessage::Inactive(handle) => {
+                    if handle == requeued_handle {
+                        requeued_inactive += 1;
+                    } else if handle == blocker_handle {
+                        blocker_inactive += 1;
+                    }
+                    active_handles.remove(&handle);
+                }
+                RunnerMessage::Error(_) => (),
+                #[cfg(feature = "gui")]
+                RunnerMessage::Finished => (),
+            }
+        }
+    })
+    .await
+    .expect("expected inactive messages for canceled downloads");
+
+    assert_eq!(requeued_inactive, 1);
+    assert!(
+        !active_handles.contains(&requeued_handle),
+        "requeued task remained active after cancel"
+    );
+    assert!(
+        !active_handles.contains(&blocker_handle),
+        "blocker task remained active after cancel"
+    );
+    assert!(
+        active_handles.is_empty(),
+        "all active entries should be cleared after cancel handling"
+    );
 
     cancel.cancel();
     for worker in workers {

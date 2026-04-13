@@ -215,6 +215,13 @@ pub(crate) async fn worker<D: DownloadDriver>(
             _ = cancellation_token.cancelled() => break,
             Ok(download) = receiver.recv() => {
                 if download.stop.is_cancelled() {
+                    // If this task had already become active in a prior attempt, emit
+                    // Inactive once so UI/CLI state does not keep a stale active entry.
+                    if download.start.read().await.is_some() {
+                        message_sender
+                            .send(RunnerMessage::Inactive(download.node.handle.clone()))
+                            .await?;
+                    }
                     continue;
                 }
 
