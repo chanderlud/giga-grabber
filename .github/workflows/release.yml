@@ -18,13 +18,12 @@ jobs:
         rust: [stable]
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust }}
-          override: true
           components: rustfmt, clippy
 
       - name: Install Dependencies
@@ -82,7 +81,7 @@ jobs:
 
       - name: Upload Linux artifact
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64
           path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64
@@ -98,7 +97,7 @@ jobs:
 
       - name: Upload macOS artifact
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64
           path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64
@@ -110,7 +109,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: dist
 
