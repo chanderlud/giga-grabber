@@ -19,7 +19,7 @@ use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-fn make_download(name: &str, size: u64, dir: PathBuf) -> Download {
+pub(crate) fn make_download(name: &str, size: u64, dir: PathBuf) -> Download {
     let node = Node::test_file(format!("handle-{name}"), name.to_string(), size);
     let file = MegaFile::new(node, dir);
     Download::new(&file)
@@ -29,14 +29,14 @@ fn make_driver(actions: Vec<DriverAction>) -> FakeDriver {
     FakeDriver::new(VecDeque::from(actions))
 }
 
-async fn next_message(receiver: &mut Receiver<RunnerMessage>) -> RunnerMessage {
+pub(crate) async fn next_message(receiver: &mut Receiver<RunnerMessage>) -> RunnerMessage {
     timeout(Duration::from_secs(5), receiver.recv())
         .await
         .expect("message timeout")
         .expect("message channel closed")
 }
 
-async fn wait_for_paused(download: &Download) {
+pub(crate) async fn wait_for_paused(download: &Download) {
     timeout(Duration::from_secs(3), async {
         loop {
             if download.pause_state() == PauseState::Paused {
@@ -58,7 +58,7 @@ async fn wait_for_inactive(receiver: &mut Receiver<RunnerMessage>, expected: usi
     }
 }
 
-async fn wait_for_driver_calls(driver: &FakeDriver, expected: usize) {
+pub(crate) async fn wait_for_driver_calls(driver: &FakeDriver, expected: usize) {
     timeout(Duration::from_secs(3), async {
         loop {
             if driver.call_count() >= expected {

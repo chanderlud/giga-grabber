@@ -84,7 +84,6 @@ impl Download {
         }
     }
 
-    #[cfg(feature = "gui")]
     pub(crate) fn cancel(&self) {
         self.stop.cancel();
     }
@@ -143,7 +142,6 @@ pub(crate) enum RunnerMessage {
     /// notifies the UI when non-critical errors bubble up
     Error(String),
     /// may be emitted during shutdown
-    #[cfg(feature = "gui")]
     Finished,
 }
 
@@ -487,4 +485,4 @@ pub(crate) mod fake {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

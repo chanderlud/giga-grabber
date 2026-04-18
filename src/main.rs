@@ -19,18 +19,16 @@ mod cli;
 mod components;
 mod config;
 mod helpers;
-#[cfg(feature = "gui")]
-mod loading_wheel;
 mod mega_client;
 #[cfg(feature = "gui")]
-mod resources;
-#[cfg(feature = "gui")]
 mod screens;
+mod session;
 #[cfg(feature = "gui")]
 mod styles;
 mod worker;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
+pub(crate) use session::*;
 pub(crate) use worker::*;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Eq, clap::ValueEnum)]

@@ -1,6 +1,6 @@
 use crate::app::MONOSPACE;
 use crate::mega_client::NodeKind;
-use crate::resources::{COLLAPSE_ICON, EXPAND_ICON};
+use crate::screens::{COLLAPSE_ICON, EXPAND_ICON};
 use crate::{Download, MegaFile, styles};
 use iced::alignment::Vertical;
 use iced::widget::*;
