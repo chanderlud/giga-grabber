@@ -1,6 +1,6 @@
-use crate::helpers::Route;
-use crate::screens::{CHOOSE_ICON, HOME_ICON, IMPORT_ICON, SELECTED_ICON, SETTINGS_ICON};
-use crate::styles;
+use crate::app::helpers::Route;
+use crate::app::screens::{CHOOSE_ICON, HOME_ICON, IMPORT_ICON, SELECTED_ICON, SETTINGS_ICON};
+use crate::app::styles;
 use iced::widget::{Column, Row, button, container, space, svg, text};
 use iced::{Alignment, Element, Length, Theme};
 

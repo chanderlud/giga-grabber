@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::mega_client::MegaClient;
+use crate::worker::mega_client::MegaClient;
 use crate::{MegaFile, WorkerHandle};
 use log::error;
 use std::future::Future;
@@ -13,6 +13,8 @@ use tokio::sync::{Mutex, RwLock, Semaphore, watch};
 use tokio::time::{Instant, sleep};
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
+
+pub(crate) mod mega_client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PauseState {

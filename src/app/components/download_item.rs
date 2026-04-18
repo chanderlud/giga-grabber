@@ -1,8 +1,8 @@
-use crate::Download;
 use crate::app::MONOSPACE;
-use crate::helpers::{format_size, icon_button, pad_f32};
-use crate::screens::{PAUSE_ICON, PLAY_ICON, X_ICON};
-use crate::styles;
+use crate::app::helpers::{icon_button, pad_f32};
+use crate::app::screens::{PAUSE_ICON, PLAY_ICON, X_ICON};
+use crate::app::styles;
+use crate::{Download, format_size};
 use iced::alignment::Vertical;
 use iced::widget::{Row, container, progress_bar, space, text};
 use iced::{Alignment, Element, Length};

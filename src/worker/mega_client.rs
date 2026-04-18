@@ -1,3 +1,5 @@
+use crate::ProxyMode;
+use crate::config::Config;
 use crate::worker::{Download, PauseState};
 use aes::Aes128;
 use anyhow::{Context, Result, bail};
@@ -10,7 +12,7 @@ use cipher::{BlockDecrypt, BlockDecryptMut, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use futures::StreamExt;
 use log::error;
-use reqwest::header;
+use reqwest::{Client, Proxy, header};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
@@ -674,6 +676,35 @@ struct DownloadResponse {
     size: u64,
     #[serde(rename = "at")]
     attr: String,
+}
+
+/// build a new mega client from config
+pub(crate) fn mega_builder(config: &Config) -> Result<MegaClient> {
+    config
+        .validate()
+        .map_err(|message| anyhow::anyhow!("invalid config: {message}"))?;
+
+    // build http client
+    let http_client = Client::builder()
+        .proxy(Proxy::custom({
+            let proxies = config.proxies.clone();
+            let proxy_mode = config.proxy_mode;
+
+            move |_| match proxy_mode {
+                ProxyMode::Random => {
+                    let i = fastrand::usize(..proxies.len());
+                    Some(proxies[i].clone())
+                }
+                ProxyMode::Single => Some(proxies[0].clone()),
+                ProxyMode::None => None::<Url>,
+            }
+        }))
+        .connect_timeout(config.timeout)
+        .read_timeout(config.timeout)
+        .tcp_keepalive(None)
+        .build()?;
+
+    MegaClient::new(http_client)
 }
 
 /// Parse public MEGA link: file/folder, node id, raw key bytes

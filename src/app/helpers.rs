@@ -1,30 +1,16 @@
-#[cfg(feature = "gui")]
-use crate::RunnerMessage;
-use crate::config::Config;
-use crate::mega_client::MegaClient;
-#[cfg(feature = "gui")]
-use crate::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
-use crate::{ProxyMode, styles};
-#[cfg(feature = "gui")]
-use iced::futures::Stream;
-#[cfg(feature = "gui")]
-use iced::futures::sink::SinkExt;
-#[cfg(feature = "gui")]
-use iced::widget::svg::{Status, Style};
-#[cfg(feature = "gui")]
+use crate::app::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
+use crate::app::styles;
+use crate::worker::RunnerMessage;
+use futures::{SinkExt, Stream};
+use iced::widget::svg::Status;
+use iced::widget::svg::Style;
 use iced::widget::{button, svg};
-#[cfg(feature = "gui")]
 use iced::{Element, Length, Theme, stream};
-use reqwest::{Client, Proxy};
-#[cfg(feature = "gui")]
 use std::collections::HashMap;
 use std::time::Duration;
-#[cfg(feature = "gui")]
 use tokio::sync::mpsc::{Sender, channel};
 use tokio::time::{MissedTickBehavior, interval};
-use url::Url;
 
-#[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     /// force the GUI to update
@@ -49,7 +35,6 @@ pub(crate) enum Message {
     ClearFiles,
 }
 
-#[cfg(feature = "gui")]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Route {
     Home,
@@ -58,14 +43,12 @@ pub(crate) enum Route {
     Settings,
 }
 
-#[cfg(feature = "gui")]
 #[derive(Default)]
 pub(crate) struct UrlInput {
     pub(crate) value: String,
     pub(crate) status: UrlStatus,
 }
 
-#[cfg(feature = "gui")]
 #[derive(PartialEq, Clone, Copy, Default)]
 pub(crate) enum UrlStatus {
     #[default]
@@ -76,14 +59,12 @@ pub(crate) enum UrlStatus {
 }
 
 /// a wrapper around HashMap that uses an incrementing index as the key
-#[cfg(feature = "gui")]
 pub(crate) struct IndexMap<T> {
     pub(crate) data: HashMap<usize, T>,
     unused_indices: Vec<usize>,
     next_index: usize,
 }
 
-#[cfg(feature = "gui")]
 impl<T: Default> Default for IndexMap<T> {
     fn default() -> Self {
         Self {
@@ -94,7 +75,6 @@ impl<T: Default> Default for IndexMap<T> {
     }
 }
 
-#[cfg(feature = "gui")]
 impl<T> IndexMap<T>
 where
     T: Default,
@@ -147,36 +127,25 @@ where
     }
 }
 
-/// build a new mega client from config
-pub(crate) fn mega_builder(config: &Config) -> anyhow::Result<MegaClient> {
-    config
-        .validate()
-        .map_err(|message| anyhow::anyhow!("invalid config: {message}"))?;
+/// rounds f32 & pads with spaces
+pub(crate) fn pad_f32(num: f32) -> String {
+    let mut s = if num < 0.0001 {
+        String::from("0")
+    } else if num < 10.0 {
+        format!("{:.2}", num)
+    } else if num < 100.0 {
+        format!("{:.1}", num)
+    } else {
+        format!("{:.0}", num)
+    };
 
-    // build http client
-    let http_client = Client::builder()
-        .proxy(Proxy::custom({
-            let proxies = config.proxies.clone();
-            let proxy_mode = config.proxy_mode;
+    while s.len() <= 3 {
+        s.insert(0, ' ');
+    }
 
-            move |_| match proxy_mode {
-                ProxyMode::Random => {
-                    let i = fastrand::usize(..proxies.len());
-                    Some(proxies[i].clone())
-                }
-                ProxyMode::Single => Some(proxies[0].clone()),
-                ProxyMode::None => None::<Url>,
-            }
-        }))
-        .connect_timeout(config.timeout)
-        .read_timeout(config.timeout)
-        .tcp_keepalive(None)
-        .build()?;
-
-    MegaClient::new(http_client)
+    s
 }
 
-#[cfg(feature = "gui")]
 pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
     stream::channel(100, async |mut output| {
         // Create tokio channel for workers
@@ -221,7 +190,6 @@ pub(crate) fn runner_worker() -> impl Stream<Item = Message> {
 }
 
 /// build an icon button
-#[cfg(feature = "gui")]
 pub(crate) fn icon_button<M: Clone + 'static>(
     icon: &'static [u8],
     message: M,
@@ -240,50 +208,11 @@ pub(crate) fn icon_button<M: Clone + 'static>(
 }
 
 /// pads a usize with spaces
-#[cfg(feature = "gui")]
 pub(crate) fn pad_usize(num: usize) -> String {
     let mut s = num.to_string();
 
     while s.len() < 3 {
         s.push(' ');
-    }
-
-    s
-}
-
-/// Format a byte count into a human-readable string
-pub(crate) fn format_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.2} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.2} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{b} B")
-    }
-}
-
-/// rounds f32 & pads with spaces
-#[cfg(feature = "gui")]
-pub(crate) fn pad_f32(num: f32) -> String {
-    let mut s = if num < 0.0001 {
-        String::from("0")
-    } else if num < 10.0 {
-        format!("{:.2}", num)
-    } else if num < 100.0 {
-        format!("{:.1}", num)
-    } else {
-        format!("{:.0}", num)
-    };
-
-    while s.len() <= 3 {
-        s.insert(0, ' ');
     }
 
     s

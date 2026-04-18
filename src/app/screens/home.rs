@@ -1,6 +1,6 @@
 use crate::app::MONOSPACE;
-use crate::components::download_item;
-use crate::{Download, styles};
+use crate::app::components::download_item;
+use crate::{Download, app::styles};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Column, Row, button, container, scrollable, text};
 use iced::{Border, Element, Length, Theme};

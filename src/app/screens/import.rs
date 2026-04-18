@@ -1,10 +1,10 @@
 use crate::MegaFile;
-use crate::components::loading_wheel::LoadingWheelWidget;
+use crate::app::components::loading_wheel::LoadingWheelWidget;
+use crate::app::helpers::{IndexMap, UrlInput, UrlStatus};
+use crate::app::screens::{CHECK_ICON, TRASH_ICON};
+use crate::app::styles;
 use crate::get_files;
-use crate::helpers::{IndexMap, UrlInput, UrlStatus};
 use crate::mega_client::MegaClient;
-use crate::screens::{CHECK_ICON, TRASH_ICON};
-use crate::styles;
 use iced::widget::*;
 use iced::{Alignment, Element, Length, Task, clipboard};
 use regex::Regex;

@@ -1,9 +1,10 @@
+use crate::app::styles::is_vanilla;
 use iced::widget::pick_list::{Status, Style};
 use iced::{Border, Theme};
 
 pub(crate) fn default(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let is_vanilla = crate::styles::is_vanilla(theme);
+    let is_vanilla = is_vanilla(theme);
 
     let active = Style {
         text_color: palette.background.weak.text,

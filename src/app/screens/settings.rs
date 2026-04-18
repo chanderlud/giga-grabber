@@ -1,9 +1,9 @@
 use crate::ProxyMode;
 use crate::app::MONOSPACE;
+use crate::app::helpers::{UrlStatus, pad_usize};
+use crate::app::screens::X_ICON;
+use crate::app::styles;
 use crate::config::{Config, MAX_CONCURRENCY, MAX_MAX_WORKERS, MIN_CONCURRENCY, MIN_MAX_WORKERS};
-use crate::helpers::{UrlStatus, pad_usize};
-use crate::screens::X_ICON;
-use crate::styles;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
     Column, Row, button, container, pick_list, scrollable, slider, space, svg, text, text_input,

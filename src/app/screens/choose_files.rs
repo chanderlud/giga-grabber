@@ -1,7 +1,7 @@
 use crate::app::MONOSPACE;
+use crate::app::screens::{COLLAPSE_ICON, EXPAND_ICON};
 use crate::mega_client::NodeKind;
-use crate::screens::{COLLAPSE_ICON, EXPAND_ICON};
-use crate::{Download, MegaFile, styles};
+use crate::{Download, MegaFile, app::styles};
 use iced::alignment::Vertical;
 use iced::widget::*;
 use iced::{Element, Length, Theme};

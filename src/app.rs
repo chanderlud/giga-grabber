@@ -1,8 +1,9 @@
-use crate::components::{error_modal, nav_sidebar};
+use crate::app::components::{error_modal, nav_sidebar};
+use crate::app::helpers::*;
+use crate::app::screens::*;
 use crate::config::Config;
-use crate::helpers::*;
 use crate::mega_client::MegaClient;
-use crate::screens::*;
+use crate::worker::mega_client::mega_builder;
 use crate::{MegaFile, RunnerMessage, SessionEvent, TransferSession};
 use iced::font::{Family, Weight};
 use iced::time::every;
@@ -11,6 +12,11 @@ use iced::{Element, Font, Length, Subscription, Task, Theme};
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
+
+mod components;
+mod helpers;
+mod screens;
+mod styles;
 
 pub(crate) const MONOSPACE: Font = Font {
     family: Family::Name("Inconsolata"),
@@ -97,71 +103,63 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Refresh => Task::none(),
-            Message::Home(msg) => {
-                use crate::screens::home::Action;
-                match self.home.update(msg) {
-                    Action::None => Task::none(),
-                    Action::StopWorkers => {
-                        if let Some(session) = &mut self.session {
-                            session.abort_background();
-                        }
-                        self.session = None;
-                        Task::none()
+            Message::Home(msg) => match self.home.update(msg) {
+                HomeAction::None => Task::none(),
+                HomeAction::StopWorkers => {
+                    if let Some(session) = &mut self.session {
+                        session.abort_background();
                     }
+                    self.session = None;
+                    Task::none()
                 }
-            }
-            Message::Import(msg) => {
-                use crate::screens::import::Action;
-                match self.import.update(msg, &self.mega) {
-                    Action::None => Task::none(),
-                    Action::Run(task) => task.map(Message::Import),
-                    Action::FilesLoaded(files) => {
-                        let mut tracked_handles = self.file_handles.clone();
-                        tracked_handles.extend(
-                            self.session
-                                .as_ref()
-                                .map_or_else(HashSet::new, TransferSession::handles),
-                        );
-                        let mut accepted: Vec<MegaFile> = Vec::new();
-                        for file in files {
-                            let Some(file) = file.without_handles(&tracked_handles) else {
-                                continue;
-                            };
+            },
+            Message::Import(msg) => match self.import.update(msg, &self.mega) {
+                ImportAction::None => Task::none(),
+                ImportAction::Run(task) => task.map(Message::Import),
+                ImportAction::FilesLoaded(files) => {
+                    let mut tracked_handles = self.file_handles.clone();
+                    tracked_handles.extend(
+                        self.session
+                            .as_ref()
+                            .map_or_else(HashSet::new, TransferSession::handles),
+                    );
+                    let mut accepted: Vec<MegaFile> = Vec::new();
+                    for file in files {
+                        let Some(file) = file.without_handles(&tracked_handles) else {
+                            continue;
+                        };
 
-                            for handle in file.iter().map(|entry| entry.node.handle.clone()) {
-                                tracked_handles.insert(handle.clone());
-                                self.file_handles.insert(handle);
-                            }
-
-                            accepted.push(file);
+                        for handle in file.iter().map(|entry| entry.node.handle.clone()) {
+                            tracked_handles.insert(handle.clone());
+                            self.file_handles.insert(handle);
                         }
 
-                        if !accepted.is_empty() {
-                            if let Some(choose_files) = &mut self.choose_files {
-                                choose_files.add_files(accepted);
-                            } else {
-                                self.choose_files = Some(ChooseFiles::new(accepted));
-                            }
+                        accepted.push(file);
+                    }
+
+                    if !accepted.is_empty() {
+                        if let Some(choose_files) = &mut self.choose_files {
+                            choose_files.add_files(accepted);
+                        } else {
+                            self.choose_files = Some(ChooseFiles::new(accepted));
                         }
-                        Task::none()
                     }
-                    Action::ShowError(error) => {
-                        self.error_modal = Some(error);
-                        Task::none()
-                    }
+                    Task::none()
                 }
-            }
+                ImportAction::ShowError(error) => {
+                    self.error_modal = Some(error);
+                    Task::none()
+                }
+            },
             Message::ChooseFiles(msg) => {
-                use crate::screens::choose_files::Action;
-
                 if let Some(choose_files) = &mut self.choose_files {
                     let session_handles = self
                         .session
                         .as_ref()
                         .map_or_else(HashSet::new, TransferSession::handles);
                     match choose_files.update(msg, &session_handles) {
-                        Action::None => Task::none(),
-                        Action::QueueDownloads(downloads) => {
+                        ChooseFilesAction::None => Task::none(),
+                        ChooseFilesAction::QueueDownloads(downloads) => {
                             let Some(runner_sender) = self.runner_sender.clone() else {
                                 self.error_modal =
                                     Some("Download runner is not ready yet".to_string());
@@ -198,7 +196,7 @@ impl App {
                             self.choose_files = None;
                             Task::perform(async {}, |_| Message::ClearFiles)
                         }
-                        Action::ClearFiles => {
+                        ChooseFilesAction::ClearFiles => {
                             self.choose_files = None;
                             Task::perform(async {}, |_| Message::ClearFiles)
                         }
@@ -240,11 +238,10 @@ impl App {
                 Task::none()
             }
             Message::Settings(msg) => {
-                use crate::screens::settings::Action;
                 match self.settings.update(msg) {
-                    Action::None => Task::none(),
-                    Action::ConfigSaved => Task::none(),
-                    Action::RebuildRequired(config) => {
+                    SettingsAction::None => Task::none(),
+                    SettingsAction::ConfigSaved => Task::none(),
+                    SettingsAction::RebuildRequired(config) => {
                         // if the worker is active, do not rebuild
                         if self
                             .session
@@ -275,7 +272,7 @@ impl App {
                             }
                         }
                     }
-                    Action::ShowError(error) => {
+                    SettingsAction::ShowError(error) => {
                         self.error_modal = Some(error);
                         Task::none()
                     }

@@ -1,8 +1,7 @@
 use crate::config::Config;
-use crate::helpers::format_size;
-use crate::helpers::mega_builder;
 use crate::mega_client::NodeKind;
-use crate::{Download, RunnerMessage, SessionEvent, TransferSession, get_files};
+use crate::worker::mega_client::mega_builder;
+use crate::{Download, RunnerMessage, SessionEvent, TransferSession, format_size, get_files};
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};

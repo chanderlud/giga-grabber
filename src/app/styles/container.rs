@@ -1,10 +1,11 @@
+use crate::app::styles::is_vanilla;
 use iced::widget::container::Style;
 use iced::{Border, Color, Theme, border};
 
 pub(crate) fn download_style(index: usize) -> impl Fn(&Theme) -> Style {
     move |theme: &Theme| {
         let palette = theme.extended_palette();
-        let is_vanilla = crate::styles::is_vanilla(theme);
+        let is_vanilla = is_vanilla(theme);
         Style {
             text_color: Some(palette.background.base.text),
             background: Some(if !index.is_multiple_of(2) {
@@ -30,7 +31,7 @@ pub(crate) fn download_style(index: usize) -> impl Fn(&Theme) -> Style {
 pub(crate) fn download_list_style() -> impl Fn(&Theme) -> Style {
     move |theme: &Theme| {
         let palette = theme.extended_palette();
-        let is_vanilla = crate::styles::is_vanilla(theme);
+        let is_vanilla = is_vanilla(theme);
 
         Style {
             text_color: Some(palette.background.base.text),
@@ -59,7 +60,7 @@ pub(crate) fn download_list_style() -> impl Fn(&Theme) -> Style {
 pub(crate) fn icon_style(active: bool) -> impl Fn(&Theme) -> Style {
     move |theme: &Theme| {
         let palette = theme.extended_palette();
-        let is_vanilla = crate::styles::is_vanilla(theme);
+        let is_vanilla = is_vanilla(theme);
         Style {
             text_color: None,
             background: if active {

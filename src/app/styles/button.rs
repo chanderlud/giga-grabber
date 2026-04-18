@@ -1,3 +1,4 @@
+use crate::app::styles::is_vanilla;
 use iced::widget::button;
 use iced::widget::button::{Status, Style};
 use iced::{Border, Color, Theme, border};
@@ -5,7 +6,7 @@ use iced::{Border, Color, Theme, border};
 pub(crate) fn navigation(active: bool) -> impl Fn(&Theme, Status) -> Style {
     move |theme: &Theme, status: Status| {
         let palette = theme.extended_palette();
-        let is_vanilla = crate::styles::is_vanilla(theme);
+        let is_vanilla = is_vanilla(theme);
 
         match status {
             Status::Active => Style {

@@ -15,16 +15,8 @@ use tokio::task::JoinHandle;
 #[cfg(feature = "gui")]
 mod app;
 mod cli;
-#[cfg(feature = "gui")]
-mod components;
 mod config;
-mod helpers;
-mod mega_client;
-#[cfg(feature = "gui")]
-mod screens;
 mod session;
-#[cfg(feature = "gui")]
-mod styles;
 mod worker;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
@@ -226,6 +218,24 @@ fn parse_files<'a>(
         .collect();
 
     MegaFile::new(node.clone(), path).add_children(children)
+}
+
+/// Format a byte count into a human-readable string
+fn format_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.2} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.2} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{b} B")
+    }
 }
 
 #[cfg(test)]
