@@ -145,7 +145,7 @@ pub(crate) enum RunnerMessage {
     Finished,
 }
 
-type RunnerChannel = (Sender<RunnerMessage>, u64);
+pub(crate) type RunnerChannel = (Sender<RunnerMessage>, u64);
 
 pub(crate) enum RetryDecision {
     Wait,
