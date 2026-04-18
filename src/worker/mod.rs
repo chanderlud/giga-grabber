@@ -136,14 +136,16 @@ impl Download {
 #[derive(Debug, Clone)]
 pub(crate) enum RunnerMessage {
     /// notifies UI that this download has become active
-    Active(Download),
+    Active { session_id: u64, download: Download },
     /// notifies the UI that this download is finished
-    Inactive(String),
+    Inactive { session_id: u64, handle: String },
     /// notifies the UI when non-critical errors bubble up
-    Error(String),
+    Error { session_id: u64, error: String },
     /// may be emitted during shutdown
     Finished,
 }
+
+type RunnerChannel = (Sender<RunnerMessage>, u64);
 
 pub(crate) enum RetryDecision {
     Wait,
@@ -175,7 +177,7 @@ pub(crate) fn spawn_workers<D: DownloadDriver>(
     config: Arc<Config>,
     receiver: kanal::AsyncReceiver<Download>,
     download_sender: kanal::AsyncSender<Download>,
-    message_sender: Sender<RunnerMessage>,
+    runner: RunnerChannel,
     cancellation_token: CancellationToken,
     workers: usize,
 ) -> Vec<WorkerHandle> {
@@ -189,7 +191,7 @@ pub(crate) fn spawn_workers<D: DownloadDriver>(
                 config.clone(),
                 receiver.clone(),
                 download_sender.clone(),
-                message_sender.clone(),
+                runner.clone(),
                 cancellation_token.clone(),
                 concurrency_sem.clone(),
             ))
@@ -204,10 +206,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
     config: Arc<Config>,
     receiver: kanal::AsyncReceiver<Download>,
     download_sender: kanal::AsyncSender<Download>,
-    message_sender: Sender<RunnerMessage>,
+    runner: RunnerChannel,
     cancellation_token: CancellationToken,
     concurrency_sem: Arc<Semaphore>,
 ) -> anyhow::Result<()> {
+    let (message_sender, session_id) = runner;
+
     'worker: loop {
         select! {
             _ = cancellation_token.cancelled() => break,
@@ -217,7 +221,10 @@ pub(crate) async fn worker<D: DownloadDriver>(
                     // Inactive once so UI/CLI state does not keep a stale active entry.
                     if download.start.read().await.is_some() {
                         message_sender
-                            .send(RunnerMessage::Inactive(download.node.handle.clone()))
+                            .send(RunnerMessage::Inactive {
+                                session_id,
+                                handle: download.node.handle.clone(),
+                            })
                             .await?;
                     }
                     continue;
@@ -241,11 +248,22 @@ pub(crate) async fn worker<D: DownloadDriver>(
                         }
                         RetryDecision::GiveUp => {
                             // report the error to the UI
-                            message_sender.send(RunnerMessage::Error(
-                                format!("Max retries reached for {}", download.node.name)
-                            )).await?;
+                            message_sender
+                                .send(RunnerMessage::Error {
+                                    session_id,
+                                    error: format!(
+                                        "Max retries reached for {}",
+                                        download.node.name
+                                    ),
+                                })
+                                .await?;
                             // report as Inactive to help CLI track completion
-                            message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
+                            message_sender
+                                .send(RunnerMessage::Inactive {
+                                    session_id,
+                                    handle: download.node.handle,
+                                })
+                                .await?;
                             continue;
                         }
                     }
@@ -263,7 +281,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
                 // this download is already complete
                 if try_exists(&full_path).await? {
                     // report as Inactive to help CLI track completion
-                    message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?;
+                    message_sender
+                        .send(RunnerMessage::Inactive {
+                            session_id,
+                            handle: download.node.handle,
+                        })
+                        .await?;
                     continue;
                 }
 
@@ -290,7 +313,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
                 // mark the download as started
                 download.start().await;
                 // alert the UI of the change
-                message_sender.send(RunnerMessage::Active(download.clone())).await?;
+                message_sender
+                    .send(RunnerMessage::Active {
+                        session_id,
+                        download: download.clone(),
+                    })
+                    .await?;
 
                 select! {
                     // abort entire worker when canceled
@@ -307,7 +335,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
                                     // mark the download complete before the final file exists.
                                     download.set_retried().await;
                                     message_sender
-                                        .send(RunnerMessage::Error(format!("Error renaming file {partial_path:?}: {error:?}")))
+                                        .send(RunnerMessage::Error {
+                                            session_id,
+                                            error: format!(
+                                                "Error renaming file {partial_path:?}: {error:?}"
+                                            ),
+                                        })
                                         .await?;
                                     // requeue download
                                     download_sender.send(download).await?;
@@ -328,7 +361,10 @@ pub(crate) async fn worker<D: DownloadDriver>(
                                         _ = cancellation_token.cancelled() => break 'worker,
                                         _ = download.stop.cancelled() => {
                                             message_sender
-                                                .send(RunnerMessage::Inactive(download.node.handle.clone()))
+                                                .send(RunnerMessage::Inactive {
+                                                    session_id,
+                                                    handle: download.node.handle.clone(),
+                                                })
                                                 .await?;
                                             continue 'worker;
                                         }
@@ -348,7 +384,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
                                 // keep track of per-download retries
                                 download.set_retried().await;
                                 // report error to UI
-                                message_sender.send(RunnerMessage::Error(error.to_string())).await?;
+                                message_sender
+                                    .send(RunnerMessage::Error {
+                                        session_id,
+                                        error: error.to_string(),
+                                    })
+                                    .await?;
                                 // requeue download
                                 download_sender.send(download).await?;
                                 continue;
@@ -358,7 +399,12 @@ pub(crate) async fn worker<D: DownloadDriver>(
                 }
 
                 // in every case, we want the UI to mark this download inactive
-                message_sender.send(RunnerMessage::Inactive(download.node.handle)).await?
+                message_sender
+                    .send(RunnerMessage::Inactive {
+                        session_id,
+                        handle: download.node.handle,
+                    })
+                    .await?
             }
             else => break,
         }

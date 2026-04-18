@@ -5,6 +5,7 @@ use anyhow::Context;
 use log::error;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
 
@@ -19,7 +20,7 @@ impl WorkerState {
             match handle.await {
                 Err(error) => error!("worker panicked: {error:?}"),
                 Ok(Err(error)) => error!("worker failed: {error:?}"),
-                Ok(Ok(())) => ()
+                Ok(Ok(())) => (),
             }
         }
     }
@@ -33,7 +34,10 @@ pub(crate) enum SessionEvent {
     Drained,
 }
 
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 pub(crate) struct TransferSession<D: DownloadDriver> {
+    id: u64,
     client: D,
     config: Arc<Config>,
     runner_sender: Option<TokioSender<RunnerMessage>>,
@@ -49,6 +53,7 @@ impl<D: DownloadDriver> TransferSession<D> {
         let (download_sender, download_receiver) = kanal::unbounded();
 
         Self {
+            id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             client,
             config: Arc::new(config),
             runner_sender: None,
@@ -64,6 +69,7 @@ impl<D: DownloadDriver> TransferSession<D> {
         self.runner_sender = Some(runner_sender);
     }
 
+    #[cfg(test)]
     pub(crate) fn contains_transfer(&self, handle: &str) -> bool {
         self.transfers.contains_key(handle)
     }
@@ -80,6 +86,7 @@ impl<D: DownloadDriver> TransferSession<D> {
         self.worker.is_some()
     }
 
+    #[cfg(test)]
     pub(crate) fn active_count(&self) -> usize {
         self.active_handles.len()
     }
@@ -94,6 +101,12 @@ impl<D: DownloadDriver> TransferSession<D> {
         &mut self,
         downloads: impl IntoIterator<Item = Download>,
     ) -> anyhow::Result<usize> {
+        if self.worker.is_none() {
+            self.runner_sender
+                .as_ref()
+                .context("runner sender not available")?;
+        }
+
         let mut added = 0usize;
 
         for download in downloads {
@@ -120,7 +133,10 @@ impl<D: DownloadDriver> TransferSession<D> {
         let mut events = Vec::new();
 
         match message {
-            RunnerMessage::Active(download) => {
+            RunnerMessage::Active {
+                session_id,
+                download,
+            } if session_id == self.id => {
                 let handle = download.node.handle.clone();
                 self.active_handles.insert(handle.clone());
                 self.transfers
@@ -128,7 +144,7 @@ impl<D: DownloadDriver> TransferSession<D> {
                     .or_insert_with(|| download.clone());
                 events.push(SessionEvent::TransferActive(download));
             }
-            RunnerMessage::Inactive(handle) => {
+            RunnerMessage::Inactive { session_id, handle } if session_id == self.id => {
                 self.active_handles.remove(&handle);
                 if self.transfers.remove(&handle).is_some() {
                     events.push(SessionEvent::TransferTerminal(handle));
@@ -137,20 +153,21 @@ impl<D: DownloadDriver> TransferSession<D> {
                     events.push(SessionEvent::Drained);
                 }
             }
-            RunnerMessage::Error(error) => events.push(SessionEvent::Error(error)),
+            RunnerMessage::Error { session_id, error } if session_id == self.id => {
+                events.push(SessionEvent::Error(error))
+            }
             RunnerMessage::Finished => {
                 if self.transfers.is_empty() {
                     events.push(SessionEvent::Drained);
                 }
             }
+            _ => {}
         }
 
         events
     }
 
-    pub(crate) fn abort_background(&mut self) -> Vec<String> {
-        let handles = self.transfers.keys().cloned().collect();
-
+    pub(crate) fn abort_background(&mut self) {
         for download in self.transfers.values() {
             download.cancel();
         }
@@ -159,8 +176,6 @@ impl<D: DownloadDriver> TransferSession<D> {
         self.transfers.clear();
         self.active_handles.clear();
         self.finish_background();
-
-        handles
     }
 
     pub(crate) async fn finish(&mut self) {
@@ -190,7 +205,7 @@ impl<D: DownloadDriver> TransferSession<D> {
                 self.config.clone(),
                 self.download_receiver.clone(),
                 self.download_sender.clone_async(),
-                runner_sender,
+                (runner_sender, self.id),
                 cancel.clone(),
                 self.config.max_workers_bounded(),
             ),
@@ -211,6 +226,7 @@ impl<D: DownloadDriver> TransferSession<D> {
 mod tests {
     use super::{SessionEvent, TransferSession};
     use crate::config::Config;
+    use crate::worker::RunnerMessage;
     use crate::worker::fake::{DriverAction, FakeDriver};
     use crate::worker::tests::{
         make_download, next_message, wait_for_driver_calls, wait_for_paused,
@@ -223,6 +239,23 @@ mod tests {
 
     fn make_driver(actions: Vec<DriverAction>) -> FakeDriver {
         FakeDriver::new(VecDeque::from(actions))
+    }
+
+    #[tokio::test]
+    async fn test_add_downloads_requires_runner_sender_before_mutating_state() {
+        let temp = TempDir::new().expect("temp dir");
+        let download = make_download("missing-runner.bin", 1024, temp.path().to_path_buf());
+        let mut session =
+            TransferSession::new(make_driver(vec![DriverAction::Complete]), Config::default());
+
+        let error = session
+            .add_downloads(vec![download.clone()])
+            .expect_err("queueing without a runner sender should fail");
+
+        assert!(error.to_string().contains("runner sender not available"));
+        assert!(!session.has_live_transfers());
+        assert_eq!(session.pending_count(), 0);
+        assert!(!session.contains_transfer(&download.node.handle));
     }
 
     #[tokio::test]
@@ -283,6 +316,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_session_ignores_stale_runner_messages_from_old_session() {
+        let temp = TempDir::new().expect("temp dir");
+        let download = make_download("fresh.bin", 1024, temp.path().to_path_buf());
+        let mut session =
+            TransferSession::new(make_driver(vec![DriverAction::Complete]), Config::default());
+        let (runner_sender, _runner_receiver) = channel(8);
+        session.set_runner_sender(runner_sender);
+        session
+            .add_downloads(vec![download.clone()])
+            .expect("queue download");
+
+        let stale_active = session.handle_runner_message(RunnerMessage::Active {
+            session_id: 0,
+            download: download.clone(),
+        });
+        let stale_inactive = session.handle_runner_message(RunnerMessage::Inactive {
+            session_id: 0,
+            handle: download.node.handle.clone(),
+        });
+        let stale_error = session.handle_runner_message(RunnerMessage::Error {
+            session_id: 0,
+            error: "stale".to_string(),
+        });
+
+        assert!(stale_active.is_empty());
+        assert!(stale_inactive.is_empty());
+        assert!(stale_error.is_empty());
+        assert!(session.contains_transfer(&download.node.handle));
+        assert_eq!(session.pending_count(), 1);
+
+        session.abort_background();
+    }
+
+    #[tokio::test]
     async fn test_session_stays_alive_while_download_is_paused() {
         let temp = TempDir::new().expect("temp dir");
         let download = make_download("paused.bin", 1024, temp.path().to_path_buf());
@@ -329,39 +396,57 @@ mod tests {
     #[tokio::test]
     async fn test_session_config_is_snapshotted_at_creation() {
         let temp = TempDir::new().expect("temp dir");
-        let download = make_download("snapshot.bin", 1024, temp.path().to_path_buf());
-        let driver = make_driver(vec![DriverAction::Complete]);
+        let first = make_download("snapshot-first.bin", 1024, temp.path().to_path_buf());
+        let second = make_download("snapshot-second.bin", 1024, temp.path().to_path_buf());
+        let driver = make_driver(vec![DriverAction::Hang, DriverAction::Complete]);
         let (runner_sender, mut runner_receiver) = channel(64);
         let config = Config {
-            max_workers: 2,
+            max_workers: 1,
             ..Default::default()
         };
 
-        let mut session = TransferSession::new(driver, config.clone());
+        let mut session = TransferSession::new(driver.clone(), config.clone());
         session.set_runner_sender(runner_sender);
 
         let mut mutated = config;
         mutated.max_workers = 9;
 
         session
-            .add_downloads(vec![download])
-            .expect("queue download");
+            .add_downloads(vec![first.clone(), second.clone()])
+            .expect("queue downloads");
 
-        let mut saw_drained = false;
+        let events = session.handle_runner_message(next_message(&mut runner_receiver).await);
+        assert!(matches!(
+            events.as_slice(),
+            [SessionEvent::TransferActive(_)]
+        ));
+        wait_for_driver_calls(&driver, 1).await;
+        assert_eq!(session.active_count(), 1);
+        assert_eq!(session.pending_count(), 1);
+
+        timeout(
+            Duration::from_millis(200),
+            next_message(&mut runner_receiver),
+        )
+        .await
+        .expect_err("second download should not start while max_workers stays snapshotted at 1");
+
+        first.stop.cancel();
+
         timeout(Duration::from_secs(3), async {
-            while !saw_drained {
-                for event in session.handle_runner_message(next_message(&mut runner_receiver).await)
+            loop {
+                let events = session.handle_runner_message(next_message(&mut runner_receiver).await);
+                if events
+                    .iter()
+                    .any(|event| matches!(event, SessionEvent::TransferActive(download) if download.node.handle == second.node.handle))
                 {
-                    if matches!(event, SessionEvent::Drained) {
-                        saw_drained = true;
-                    }
+                    break;
                 }
             }
         })
         .await
-        .expect("session drain timeout");
+        .expect("second download never became active");
 
-        assert!(session.is_running());
         session.finish().await;
         assert_eq!(mutated.max_workers, 9);
     }

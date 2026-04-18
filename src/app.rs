@@ -116,24 +116,24 @@ impl App {
                     Action::None => Task::none(),
                     Action::Run(task) => task.map(Message::Import),
                     Action::FilesLoaded(files) => {
-                        let session_handles = self
-                            .session
-                            .as_ref()
-                            .map_or_else(HashSet::new, TransferSession::handles);
-                        // Filter duplicates using file_handles
+                        let mut tracked_handles = self.file_handles.clone();
+                        tracked_handles.extend(
+                            self.session
+                                .as_ref()
+                                .map_or_else(HashSet::new, TransferSession::handles),
+                        );
                         let mut accepted: Vec<MegaFile> = Vec::new();
                         for file in files {
-                            let handles: Vec<String> =
-                                file.iter().map(|f| f.node.handle.clone()).collect();
-                            let has_duplicate = handles.iter().any(|h| {
-                                self.file_handles.contains(h) || session_handles.contains(h)
-                            });
-                            if !has_duplicate {
-                                for handle in &handles {
-                                    self.file_handles.insert(handle.clone());
-                                }
-                                accepted.push(file);
+                            let Some(file) = file.without_handles(&tracked_handles) else {
+                                continue;
+                            };
+
+                            for handle in file.iter().map(|entry| entry.node.handle.clone()) {
+                                tracked_handles.insert(handle.clone());
+                                self.file_handles.insert(handle);
                             }
+
+                            accepted.push(file);
                         }
 
                         if !accepted.is_empty() {
@@ -167,6 +167,12 @@ impl App {
                                     Some("Download runner is not ready yet".to_string());
                                 return Task::none();
                             };
+
+                            if downloads.is_empty() {
+                                self.route = Route::Home;
+                                self.choose_files = None;
+                                return Task::perform(async {}, |_| Message::ClearFiles);
+                            }
 
                             if self.session.is_none() {
                                 let mut session = TransferSession::new(

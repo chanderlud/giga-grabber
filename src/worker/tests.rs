@@ -52,7 +52,7 @@ pub(crate) async fn wait_for_paused(download: &Download) {
 async fn wait_for_inactive(receiver: &mut Receiver<RunnerMessage>, expected: usize) {
     let mut inactive = 0usize;
     while inactive < expected {
-        if matches!(next_message(receiver).await, RunnerMessage::Inactive(_)) {
+        if matches!(next_message(receiver).await, RunnerMessage::Inactive { .. }) {
             inactive += 1;
         }
     }
@@ -311,7 +311,7 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -323,7 +323,7 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
 
     wait_for_fixture_phase(&fixture_state, 1).await;
@@ -333,7 +333,7 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
 
     wait_for_fixture_phase(&fixture_state, 3).await;
@@ -345,11 +345,11 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
 
     let full_path = download.file_path.join(&download.node.name);
@@ -389,7 +389,7 @@ async fn test_single_download_completes() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -401,11 +401,11 @@ async fn test_single_download_completes() {
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
 
     cancel.cancel();
@@ -436,7 +436,7 @@ async fn test_download_already_complete() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -448,7 +448,7 @@ async fn test_download_already_complete() {
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
     assert_eq!(driver.call_count(), 0);
 
@@ -474,7 +474,7 @@ async fn test_cancel_before_active() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -507,7 +507,7 @@ async fn test_cancel_while_active() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -519,12 +519,12 @@ async fn test_cancel_while_active() {
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     download.stop.cancel();
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
 
     cancel.cancel();
@@ -547,7 +547,7 @@ async fn test_pause_and_resume() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -558,7 +558,7 @@ async fn test_pause_and_resume() {
         .expect("enqueue download");
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
 
     wait_for_paused(&download).await;
@@ -568,11 +568,11 @@ async fn test_pause_and_resume() {
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
 
     cancel.cancel();
@@ -598,7 +598,7 @@ async fn test_quick_pause_then_single_resume_requeues_and_completes() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -610,15 +610,15 @@ async fn test_quick_pause_then_single_resume_requeues_and_completes() {
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
     assert_eq!(driver.call_count(), 2);
 
@@ -642,7 +642,7 @@ async fn test_pause_then_cancel() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -653,14 +653,14 @@ async fn test_pause_then_cancel() {
         .expect("enqueue download");
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     wait_for_paused(&download).await;
     download.stop.cancel();
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Inactive(_)
+        RunnerMessage::Inactive { .. }
     ));
 
     cancel.cancel();
@@ -686,7 +686,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -708,7 +708,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
 
     while !(saw_requeued_active && saw_blocker_active) {
         match next_message(&mut message_receiver).await {
-            RunnerMessage::Active(download) => {
+            RunnerMessage::Active { download, .. } => {
                 if download.node.handle == requeued_handle {
                     saw_requeued_active = true;
                 }
@@ -717,7 +717,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                 }
                 active_handles.insert(download.node.handle);
             }
-            RunnerMessage::Inactive(handle) => {
+            RunnerMessage::Inactive { handle, .. } => {
                 if handle == requeued_handle {
                     requeued_inactive += 1;
                 } else if handle == blocker_handle {
@@ -725,7 +725,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                 }
                 active_handles.remove(&handle);
             }
-            RunnerMessage::Error(_) => (),
+            RunnerMessage::Error { .. } => (),
             #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
@@ -738,10 +738,10 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
     timeout(Duration::from_secs(3), async {
         while requeued_inactive < 1 || blocker_inactive < 1 {
             match next_message(&mut message_receiver).await {
-                RunnerMessage::Active(download) => {
+                RunnerMessage::Active { download, .. } => {
                     active_handles.insert(download.node.handle);
                 }
-                RunnerMessage::Inactive(handle) => {
+                RunnerMessage::Inactive { handle, .. } => {
                     if handle == requeued_handle {
                         requeued_inactive += 1;
                     } else if handle == blocker_handle {
@@ -749,7 +749,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                     }
                     active_handles.remove(&handle);
                 }
-                RunnerMessage::Error(_) => (),
+                RunnerMessage::Error { .. } => (),
                 #[cfg(feature = "gui")]
                 RunnerMessage::Finished => (),
             }
@@ -803,7 +803,7 @@ async fn test_retry_on_error() {
         Arc::new(config),
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -845,7 +845,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -867,7 +867,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
 
     while !(saw_requeued_active && saw_blocker_active) {
         match next_message(&mut message_receiver).await {
-            RunnerMessage::Active(download) => {
+            RunnerMessage::Active { download, .. } => {
                 if download.node.handle == requeued_handle {
                     saw_requeued_active = true;
                 }
@@ -876,7 +876,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                 }
                 active_handles.insert(download.node.handle);
             }
-            RunnerMessage::Inactive(handle) => {
+            RunnerMessage::Inactive { handle, .. } => {
                 if handle == requeued_handle {
                     requeued_inactive += 1;
                 } else if handle == blocker_handle {
@@ -884,7 +884,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                 }
                 active_handles.remove(&handle);
             }
-            RunnerMessage::Error(_) => (),
+            RunnerMessage::Error { .. } => (),
             #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
@@ -897,10 +897,10 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
     timeout(Duration::from_secs(3), async {
         while requeued_inactive < 1 || blocker_inactive < 1 {
             match next_message(&mut message_receiver).await {
-                RunnerMessage::Active(download) => {
+                RunnerMessage::Active { download, .. } => {
                     active_handles.insert(download.node.handle);
                 }
-                RunnerMessage::Inactive(handle) => {
+                RunnerMessage::Inactive { handle, .. } => {
                     if handle == requeued_handle {
                         requeued_inactive += 1;
                     } else if handle == blocker_handle {
@@ -908,7 +908,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                     }
                     active_handles.remove(&handle);
                 }
-                RunnerMessage::Error(_) => (),
+                RunnerMessage::Error { .. } => (),
                 #[cfg(feature = "gui")]
                 RunnerMessage::Finished => (),
             }
@@ -958,7 +958,7 @@ async fn test_rename_failure_is_reported_and_not_marked_inactive_immediately() {
         Arc::new(config),
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -970,24 +970,24 @@ async fn test_rename_failure_is_reported_and_not_marked_inactive_immediately() {
 
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Active(_)
+        RunnerMessage::Active { .. }
     ));
     assert!(matches!(
         next_message(&mut message_receiver).await,
-        RunnerMessage::Error(_)
+        RunnerMessage::Error { .. }
     ));
 
     let mut saw_max_retries_error = false;
     let mut saw_inactive = false;
     while !(saw_max_retries_error && saw_inactive) {
         match next_message(&mut message_receiver).await {
-            RunnerMessage::Error(error) => {
+            RunnerMessage::Error { error, .. } => {
                 if error.contains("Max retries reached") {
                     saw_max_retries_error = true;
                 }
             }
-            RunnerMessage::Inactive(_) => saw_inactive = true,
-            RunnerMessage::Active(_) => (),
+            RunnerMessage::Inactive { .. } => saw_inactive = true,
+            RunnerMessage::Active { .. } => (),
             #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
@@ -1024,7 +1024,7 @@ async fn test_max_retries_exceeded() {
         Arc::new(config),
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -1038,13 +1038,13 @@ async fn test_max_retries_exceeded() {
     let mut saw_inactive = false;
     while !(saw_max_retries_error && saw_inactive) {
         match next_message(&mut message_receiver).await {
-            RunnerMessage::Error(error) => {
+            RunnerMessage::Error { error, .. } => {
                 if error.contains("Max retries reached") {
                     saw_max_retries_error = true;
                 }
             }
-            RunnerMessage::Inactive(_) => saw_inactive = true,
-            RunnerMessage::Active(_) => (),
+            RunnerMessage::Inactive { .. } => saw_inactive = true,
+            RunnerMessage::Active { .. } => (),
             #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
@@ -1075,7 +1075,7 @@ async fn test_global_cancel_stops_all_workers() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         2,
     );
@@ -1124,7 +1124,7 @@ async fn test_concurrency_semaphore_limits() {
         Arc::new(config),
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         2,
     );
@@ -1143,15 +1143,15 @@ async fn test_concurrency_semaphore_limits() {
     let mut inactive_count = 0usize;
     while inactive_count < 5 {
         match next_message(&mut message_receiver).await {
-            RunnerMessage::Active(_) => {
+            RunnerMessage::Active { .. } => {
                 active_count += 1;
                 max_active = max_active.max(active_count);
             }
-            RunnerMessage::Inactive(_) => {
+            RunnerMessage::Inactive { .. } => {
                 active_count = active_count.saturating_sub(1);
                 inactive_count += 1;
             }
-            RunnerMessage::Error(_) => (),
+            RunnerMessage::Error { .. } => (),
             #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
@@ -1179,7 +1179,7 @@ async fn test_pause_resume_race_no_lost_wakeup() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         1,
     );
@@ -1232,7 +1232,7 @@ async fn test_multiple_workers_drain_queue() {
         config,
         download_receiver,
         download_sender.clone(),
-        message_sender,
+        (message_sender, 0),
         cancel.clone(),
         3,
     );
