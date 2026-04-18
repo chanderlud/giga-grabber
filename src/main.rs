@@ -5,7 +5,7 @@ use crate::mega_client::{MegaClient, Node, NodeKind};
 use clap::Parser;
 use log::{LevelFilter, error};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "gui")]
 use std::env;
 use std::fmt::Display;
@@ -19,18 +19,16 @@ mod cli;
 mod components;
 mod config;
 mod helpers;
-#[cfg(feature = "gui")]
-mod loading_wheel;
 mod mega_client;
 #[cfg(feature = "gui")]
-mod resources;
-#[cfg(feature = "gui")]
 mod screens;
+mod session;
 #[cfg(feature = "gui")]
 mod styles;
 mod worker;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
+pub(crate) use session::*;
 pub(crate) use worker::*;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Eq, clap::ValueEnum)]
@@ -85,6 +83,20 @@ impl MegaFile {
 
     fn iter(&self) -> FileIter<'_> {
         FileIter { stack: vec![self] }
+    }
+
+    fn without_handles(mut self, excluded_handles: &HashSet<String>) -> Option<Self> {
+        self.children = self
+            .children
+            .into_iter()
+            .filter_map(|child| child.without_handles(excluded_handles))
+            .collect();
+
+        if excluded_handles.contains(&self.node.handle) && self.children.is_empty() {
+            return None;
+        }
+
+        Some(self)
     }
 }
 
@@ -214,4 +226,40 @@ fn parse_files<'a>(
         .collect();
 
     MegaFile::new(node.clone(), path).add_children(children)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MegaFile;
+    use crate::mega_client::Node;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_without_handles_keeps_non_duplicate_descendants() {
+        let root = MegaFile::new(Node::test_folder("folder", "folder"), PathBuf::new())
+            .add_children(vec![
+                MegaFile::new(
+                    Node::test_file("duplicate", "duplicate.bin", 1),
+                    PathBuf::from("folder"),
+                ),
+                MegaFile::new(
+                    Node::test_file("fresh", "fresh.bin", 1),
+                    PathBuf::from("folder"),
+                ),
+            ]);
+
+        let filtered = root
+            .without_handles(&HashSet::from([String::from("duplicate")]))
+            .expect("folder should still contain fresh files");
+
+        let remaining_handles: Vec<_> = filtered
+            .iter()
+            .map(|file| file.node.handle.clone())
+            .collect();
+        assert_eq!(
+            remaining_handles,
+            vec!["folder".to_string(), "fresh".to_string()]
+        );
+    }
 }

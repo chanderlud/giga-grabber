@@ -1,7 +1,5 @@
 #[cfg(feature = "gui")]
 use crate::RunnerMessage;
-#[cfg(feature = "gui")]
-use crate::WorkerHandle;
 use crate::config::Config;
 use crate::mega_client::MegaClient;
 #[cfg(feature = "gui")]
@@ -24,8 +22,6 @@ use std::time::Duration;
 #[cfg(feature = "gui")]
 use tokio::sync::mpsc::{Sender, channel};
 use tokio::time::{MissedTickBehavior, interval};
-#[cfg(feature = "gui")]
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 #[cfg(feature = "gui")]
@@ -149,12 +145,6 @@ where
 
         value
     }
-}
-
-#[cfg(feature = "gui")]
-pub(crate) struct WorkerState {
-    pub(crate) handles: Vec<WorkerHandle>,
-    pub(crate) cancel: CancellationToken,
 }
 
 /// build a new mega client from config

@@ -1,0 +1,3 @@
+## Development Rules
+- Run `cargo fmt` and `cargo clippy` after editing Rust code, resolve lints where reasonable, but err on the side of avoiding large changes without human input.
+- `docs/solutions/` stores documented solutions to past problems and practices, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`); relevant when implementing or debugging in documented areas.

@@ -65,6 +65,20 @@ impl Node {
             root_handle: handle,
         }
     }
+
+    pub(crate) fn test_folder(handle: impl Into<String>, name: impl Into<String>) -> Self {
+        let handle = handle.into();
+        Self {
+            name: name.into(),
+            handle: handle.clone(),
+            parent: None,
+            kind: NodeKind::Folder,
+            size: 0,
+            aes_key: [0; 16],
+            aes_iv: None,
+            root_handle: handle,
+        }
+    }
 }
 
 /// What kind of public link this is

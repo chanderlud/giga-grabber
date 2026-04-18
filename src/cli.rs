@@ -2,16 +2,13 @@ use crate::config::Config;
 use crate::helpers::format_size;
 use crate::helpers::mega_builder;
 use crate::mega_client::NodeKind;
-use crate::{Download, RunnerMessage, get_files, spawn_workers};
+use crate::{Download, RunnerMessage, SessionEvent, TransferSession, get_files};
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use log::error;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc::channel;
-use tokio_util::sync::CancellationToken;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -182,27 +179,10 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<()> {
     ));
 
     // channel for downloads and UI messages
-    let (download_sender, download_receiver) = kanal::unbounded_async();
     let (message_sender, mut message_receiver) = channel::<RunnerMessage>(100);
-
-    let cancellation_token = CancellationToken::new();
-    let config = Arc::new(config);
-
-    // queue all downloads
-    for d in &downloads {
-        download_sender.send(d.clone()).await?;
-    }
-
-    // spawn workers using your existing helper
-    let workers = spawn_workers(
-        client.clone(),
-        config.clone(),
-        download_receiver,
-        download_sender.clone(),
-        message_sender.clone(),
-        cancellation_token.clone(),
-        config.max_workers_bounded(),
-    );
+    let mut session = TransferSession::new(client.clone(), config.clone());
+    session.set_runner_sender(message_sender);
+    session.add_downloads(downloads.clone())?;
 
     // progress updater task: sum all `downloaded` counters
     let downloads_for_progress = downloads.clone();
@@ -229,43 +209,35 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<()> {
         }
     });
 
-    // consume RunnerMessage to know when all files are done & log errors
-    let mut finished_files = 0usize;
-
     while let Some(msg) = message_receiver.recv().await {
-        match msg {
-            RunnerMessage::Active(download) => {
-                pb.println(format!(
-                    "→ {} ({})",
-                    download.node.name,
-                    format_size(download.node.size)
-                ));
-            }
-            RunnerMessage::Inactive(_handle) => {
-                finished_files += 1;
-                if finished_files == total_files {
-                    break;
+        let events = session.handle_runner_message(msg);
+        let mut drained = false;
+
+        for event in events {
+            match event {
+                SessionEvent::TransferActive(download) => {
+                    pb.println(format!(
+                        "→ {} ({})",
+                        download.node.name,
+                        format_size(download.node.size)
+                    ));
+                }
+                SessionEvent::TransferTerminal(_) => {}
+                SessionEvent::Error(err) => {
+                    pb.println(format!("Error: {err}"));
+                }
+                SessionEvent::Drained => {
+                    drained = true;
                 }
             }
-            RunnerMessage::Error(err) => {
-                pb.println(format!("Error: {err}"));
-            }
-            #[cfg(feature = "gui")]
-            RunnerMessage::Finished => {
-                break;
-            }
+        }
+
+        if drained {
+            break;
         }
     }
 
-    // stop workers once everything is done
-    cancellation_token.cancel();
-
-    for handle in workers {
-        if let Err(join_err) = handle.await {
-            error!("Worker join error: {join_err:?}");
-        }
-    }
-
+    session.finish().await;
     let _ = progress_task.await;
 
     if total_bytes > 0 {

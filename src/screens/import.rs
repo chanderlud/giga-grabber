@@ -1,9 +1,9 @@
 use crate::MegaFile;
+use crate::components::loading_wheel::LoadingWheelWidget;
 use crate::get_files;
 use crate::helpers::{IndexMap, UrlInput, UrlStatus};
-use crate::loading_wheel::LoadingWheelWidget;
 use crate::mega_client::MegaClient;
-use crate::resources::{CHECK_ICON, TRASH_ICON};
+use crate::screens::{CHECK_ICON, TRASH_ICON};
 use crate::styles;
 use iced::widget::*;
 use iced::{Alignment, Element, Length, Task, clipboard};

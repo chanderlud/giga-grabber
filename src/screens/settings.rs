@@ -2,7 +2,7 @@ use crate::ProxyMode;
 use crate::app::MONOSPACE;
 use crate::config::{Config, MAX_CONCURRENCY, MAX_MAX_WORKERS, MIN_CONCURRENCY, MIN_MAX_WORKERS};
 use crate::helpers::{UrlStatus, pad_usize};
-use crate::resources::X_ICON;
+use crate::screens::X_ICON;
 use crate::styles;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{

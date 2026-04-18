@@ -2,20 +2,15 @@ use crate::components::{error_modal, nav_sidebar};
 use crate::config::Config;
 use crate::helpers::*;
 use crate::mega_client::MegaClient;
-use crate::resources::*;
 use crate::screens::*;
-use crate::{Download, MegaFile, RunnerMessage, spawn_workers};
-use futures::future::join_all;
+use crate::{MegaFile, RunnerMessage, SessionEvent, TransferSession};
 use iced::font::{Family, Weight};
 use iced::time::every;
 use iced::widget::{Row, container, text};
 use iced::{Element, Font, Length, Subscription, Task, Theme};
-use log::error;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
-use tokio_util::sync::CancellationToken;
 
 pub(crate) const MONOSPACE: Font = Font {
     family: Family::Name("Inconsolata"),
@@ -29,10 +24,8 @@ pub(crate) struct App {
     choose_files: Option<ChooseFiles>,
     home: Home,
     mega: MegaClient,
-    worker: Option<WorkerState>,
+    session: Option<TransferSession<MegaClient>>,
     runner_sender: Option<TokioSender<RunnerMessage>>,
-    download_sender: kanal::Sender<Download>,
-    download_receiver: kanal::AsyncReceiver<Download>,
     file_handles: HashSet<String>,
     route: Route,
     error_modal: Option<String>,
@@ -40,7 +33,6 @@ pub(crate) struct App {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        let (download_sender, download_receiver) = kanal::unbounded();
         // load config from disk, falling back to a default config if needed
         let (mut config, mut error_modal) = Config::new();
         // build the mega client, falling back to default config if needed
@@ -61,10 +53,8 @@ impl App {
                 choose_files: None,
                 home: Home::new(),
                 mega,
-                worker: None,
+                session: None,
                 runner_sender: None,
-                download_sender,
-                download_receiver: download_receiver.to_async(),
                 file_handles: HashSet::new(),
                 route: Route::Home,
                 error_modal,
@@ -77,7 +67,11 @@ impl App {
         let mut title = String::from("Giga Grabber");
 
         // runner is None when not in use
-        if self.worker.is_some() {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(TransferSession::is_running)
+        {
             title.push_str(" - downloads active");
         }
 
@@ -89,7 +83,10 @@ impl App {
             ));
         }
 
-        let queued = self.download_receiver.len();
+        let queued = self
+            .session
+            .as_ref()
+            .map_or(0, TransferSession::pending_count);
         if queued > 0 {
             title.push_str(&format!(" - {} queued", queued));
         }
@@ -105,9 +102,10 @@ impl App {
                 match self.home.update(msg) {
                     Action::None => Task::none(),
                     Action::StopWorkers => {
-                        // Cancel queued downloads so they don't auto-start if workers restart.
-                        self.drain_download_queue();
-                        self.stop_workers();
+                        if let Some(session) = &mut self.session {
+                            session.abort_background();
+                        }
+                        self.session = None;
                         Task::none()
                     }
                 }
@@ -118,19 +116,24 @@ impl App {
                     Action::None => Task::none(),
                     Action::Run(task) => task.map(Message::Import),
                     Action::FilesLoaded(files) => {
-                        // Filter duplicates using file_handles
+                        let mut tracked_handles = self.file_handles.clone();
+                        tracked_handles.extend(
+                            self.session
+                                .as_ref()
+                                .map_or_else(HashSet::new, TransferSession::handles),
+                        );
                         let mut accepted: Vec<MegaFile> = Vec::new();
                         for file in files {
-                            let handles: Vec<String> =
-                                file.iter().map(|f| f.node.handle.clone()).collect();
-                            let has_duplicate =
-                                handles.iter().any(|h| self.file_handles.contains(h));
-                            if !has_duplicate {
-                                for handle in &handles {
-                                    self.file_handles.insert(handle.clone());
-                                }
-                                accepted.push(file);
+                            let Some(file) = file.without_handles(&tracked_handles) else {
+                                continue;
+                            };
+
+                            for handle in file.iter().map(|entry| entry.node.handle.clone()) {
+                                tracked_handles.insert(handle.clone());
+                                self.file_handles.insert(handle);
                             }
+
+                            accepted.push(file);
                         }
 
                         if !accepted.is_empty() {
@@ -152,21 +155,43 @@ impl App {
                 use crate::screens::choose_files::Action;
 
                 if let Some(choose_files) = &mut self.choose_files {
-                    let active_handles: HashSet<String> =
-                        self.home.active_downloads().keys().cloned().collect();
-                    match choose_files.update(msg, &active_handles) {
+                    let session_handles = self
+                        .session
+                        .as_ref()
+                        .map_or_else(HashSet::new, TransferSession::handles);
+                    match choose_files.update(msg, &session_handles) {
                         Action::None => Task::none(),
                         Action::QueueDownloads(downloads) => {
-                            // Queue downloads
-                            for download in downloads {
-                                self.download_sender.send(download).unwrap();
+                            let Some(runner_sender) = self.runner_sender.clone() else {
+                                self.error_modal =
+                                    Some("Download runner is not ready yet".to_string());
+                                return Task::none();
+                            };
+
+                            if downloads.is_empty() {
+                                self.route = Route::Home;
+                                self.choose_files = None;
+                                return Task::perform(async {}, |_| Message::ClearFiles);
                             }
-                            // Start workers if needed
-                            if self.worker.is_none() {
-                                self.worker = Some(
-                                    self.start_workers(self.settings.config.max_workers_bounded()),
+
+                            if self.session.is_none() {
+                                let mut session = TransferSession::new(
+                                    self.mega.clone(),
+                                    self.settings.config.clone(),
                                 );
+                                session.set_runner_sender(runner_sender.clone());
+                                self.session = Some(session);
                             }
+
+                            if let Some(session) = &mut self.session {
+                                session.set_runner_sender(runner_sender);
+                                if let Err(error) = session.add_downloads(downloads) {
+                                    self.error_modal =
+                                        Some(format!("Failed to queue downloads: {error}"));
+                                    return Task::none();
+                                }
+                            }
+
                             // Navigate to home
                             self.route = Route::Home;
                             // Clear the screen
@@ -183,6 +208,9 @@ impl App {
                 }
             }
             Message::RunnerReady(sender) => {
+                if let Some(session) = &mut self.session {
+                    session.set_runner_sender(sender.clone());
+                }
                 self.runner_sender = Some(sender);
                 Task::none()
             }
@@ -218,7 +246,11 @@ impl App {
                     Action::ConfigSaved => Task::none(),
                     Action::RebuildRequired(config) => {
                         // if the worker is active, do not rebuild
-                        if self.worker.is_some() {
+                        if self
+                            .session
+                            .as_ref()
+                            .is_some_and(TransferSession::has_live_transfers)
+                        {
                             self.error_modal = Some(
                                 "Cannot apply these configuration changes while downloads are active"
                                     .to_string(),
@@ -317,75 +349,33 @@ impl App {
         Subscription::batch(vec![runner_subscription, refresh])
     }
 
-    fn start_workers(&self, workers: usize) -> WorkerState {
-        let cancel = CancellationToken::new();
-        let runner_sender = self
-            .runner_sender
-            .clone()
-            .expect("Runner sender not available - subscription may not be ready");
-        WorkerState {
-            handles: spawn_workers(
-                self.mega.clone(),
-                Arc::new(self.settings.config.clone()),
-                self.download_receiver.clone(),
-                self.download_sender.clone_async(),
-                runner_sender,
-                cancel.clone(),
-                workers,
-            ),
-            cancel,
-        }
-    }
+    fn handle_runner_message(&mut self, message: RunnerMessage) {
+        let mut drained = false;
 
-    fn stop_workers(&mut self) {
-        if let Some(state) = self.worker.take() {
-            state.cancel.cancel();
-
-            // join workers in the background to log errors
-            tokio::spawn(async move {
-                for result in join_all(state.handles).await {
-                    match result {
-                        Err(error) => error!("worker panicked: {error:?}"),
-                        Ok(Err(error)) => error!("worker failed: {error:?}"),
-                        Ok(Ok(())) => (),
+        if let Some(session) = &mut self.session {
+            for event in session.handle_runner_message(message) {
+                match event {
+                    SessionEvent::TransferActive(download) => {
+                        self.home.add_active_download(download);
+                    }
+                    SessionEvent::TransferTerminal(id) => {
+                        self.home.remove_active_download(&id);
+                    }
+                    SessionEvent::Error(error) => {
+                        self.home.add_error(error);
+                    }
+                    SessionEvent::Drained => {
+                        drained = true;
                     }
                 }
-            });
-        }
-    }
-
-    fn drain_download_queue(&mut self) {
-        loop {
-            match self.download_receiver.try_recv() {
-                Ok(Some(download)) => {
-                    download.cancel();
-                }
-                // channel closed
-                Err(_) => break,
-                // nothing currently queued
-                Ok(None) => break,
             }
         }
-    }
 
-    fn handle_runner_message(&mut self, message: RunnerMessage) {
-        match message {
-            RunnerMessage::Active(download) => {
-                // add download to active downloads
-                self.home.add_active_download(download);
+        if drained {
+            if let Some(session) = &mut self.session {
+                session.finish_background();
             }
-            RunnerMessage::Inactive(id) => {
-                self.home.remove_active_download(&id);
-
-                // if there are no active downloads, stop the runner
-                if !self.home.has_active_downloads() && self.download_receiver.is_empty() {
-                    self.stop_workers();
-                }
-            }
-            RunnerMessage::Error(error) => {
-                self.home.add_error(error);
-            }
-            RunnerMessage::Finished => (),
+            self.session = None;
         }
     }
 }
