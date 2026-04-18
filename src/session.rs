@@ -143,10 +143,8 @@ impl<D: DownloadDriver> TransferSession<D> {
             RunnerMessage::Error { session_id, error } if session_id == self.id => {
                 events.push(SessionEvent::Error(error))
             }
-            RunnerMessage::Finished => {
-                if self.transfers.is_empty() {
-                    events.push(SessionEvent::Drained);
-                }
+            RunnerMessage::Finished if self.transfers.is_empty() => {
+                events.push(SessionEvent::Drained);
             }
             _ => {}
         }
