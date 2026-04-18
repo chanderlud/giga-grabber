@@ -9,23 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio_util::sync::CancellationToken;
 
-struct WorkerState {
-    handles: Vec<WorkerHandle>,
-    cancel: CancellationToken,
-}
-
-impl WorkerState {
-    async fn join_handles(self) {
-        for handle in self.handles {
-            match handle.await {
-                Err(error) => error!("worker panicked: {error:?}"),
-                Ok(Err(error)) => error!("worker failed: {error:?}"),
-                Ok(Ok(())) => (),
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) enum SessionEvent {
     TransferActive(Download),
@@ -97,6 +80,10 @@ impl<D: DownloadDriver> TransferSession<D> {
             .saturating_sub(self.active_handles.len())
     }
 
+    /// Queues new downloads on the session channel and tracks them in this session.
+    ///
+    /// Returns how many transfers were **newly** queued. Downloads whose `node.handle`
+    /// already exists in this session are skipped (append is idempotent per handle).
     pub(crate) fn add_downloads(
         &mut self,
         downloads: impl IntoIterator<Item = Download>,
@@ -110,15 +97,15 @@ impl<D: DownloadDriver> TransferSession<D> {
         let mut added = 0usize;
 
         for download in downloads {
-            let handle = download.node.handle.clone();
-            if self.transfers.contains_key(&handle) {
+            if self.transfers.contains_key(&download.node.handle) {
                 continue;
             }
 
             self.download_sender
                 .send(download.clone())
                 .with_context(|| format!("queue {}", download.node.name))?;
-            self.transfers.insert(handle, download);
+            self.transfers
+                .insert(download.node.handle.clone(), download);
             added += 1;
         }
 
@@ -222,6 +209,23 @@ impl<D: DownloadDriver> TransferSession<D> {
     }
 }
 
+struct WorkerState {
+    handles: Vec<WorkerHandle>,
+    cancel: CancellationToken,
+}
+
+impl WorkerState {
+    async fn join_handles(self) {
+        for handle in self.handles {
+            match handle.await {
+                Err(error) => error!("worker panicked: {error:?}"),
+                Ok(Err(error)) => error!("worker failed: {error:?}"),
+                Ok(Ok(())) => (),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SessionEvent, TransferSession};
@@ -313,6 +317,35 @@ mod tests {
 
         assert!(!session.has_live_transfers());
         session.finish().await;
+    }
+
+    #[tokio::test]
+    async fn test_runner_finished_when_empty_emits_drained() {
+        let mut session = TransferSession::new(make_driver(vec![]), Config::default());
+        let (runner_sender, _runner_receiver) = channel(8);
+        session.set_runner_sender(runner_sender);
+
+        let events = session.handle_runner_message(RunnerMessage::Finished);
+        assert!(matches!(events.as_slice(), [SessionEvent::Drained]));
+    }
+
+    #[tokio::test]
+    async fn test_runner_finished_when_transfers_remain_is_noop() {
+        let temp = TempDir::new().expect("temp dir");
+        let download = make_download("pending.bin", 1024, temp.path().to_path_buf());
+        let mut session =
+            TransferSession::new(make_driver(vec![DriverAction::Complete]), Config::default());
+        let (runner_sender, _runner_receiver) = channel(8);
+        session.set_runner_sender(runner_sender);
+        session
+            .add_downloads(vec![download.clone()])
+            .expect("queue download");
+
+        let events = session.handle_runner_message(RunnerMessage::Finished);
+        assert!(events.is_empty());
+        assert!(session.contains_transfer(&download.node.handle));
+
+        session.abort_background();
     }
 
     #[tokio::test]

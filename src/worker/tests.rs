@@ -726,7 +726,6 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                 active_handles.remove(&handle);
             }
             RunnerMessage::Error { .. } => (),
-            #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
     }
@@ -750,7 +749,6 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                     active_handles.remove(&handle);
                 }
                 RunnerMessage::Error { .. } => (),
-                #[cfg(feature = "gui")]
                 RunnerMessage::Finished => (),
             }
         }
@@ -885,7 +883,6 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                 active_handles.remove(&handle);
             }
             RunnerMessage::Error { .. } => (),
-            #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
     }
@@ -909,7 +906,6 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                     active_handles.remove(&handle);
                 }
                 RunnerMessage::Error { .. } => (),
-                #[cfg(feature = "gui")]
                 RunnerMessage::Finished => (),
             }
         }
@@ -988,7 +984,6 @@ async fn test_rename_failure_is_reported_and_not_marked_inactive_immediately() {
             }
             RunnerMessage::Inactive { .. } => saw_inactive = true,
             RunnerMessage::Active { .. } => (),
-            #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
     }
@@ -1045,7 +1040,6 @@ async fn test_max_retries_exceeded() {
             }
             RunnerMessage::Inactive { .. } => saw_inactive = true,
             RunnerMessage::Active { .. } => (),
-            #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
     }
@@ -1152,7 +1146,6 @@ async fn test_concurrency_semaphore_limits() {
                 inactive_count += 1;
             }
             RunnerMessage::Error { .. } => (),
-            #[cfg(feature = "gui")]
             RunnerMessage::Finished => (),
         }
     }
