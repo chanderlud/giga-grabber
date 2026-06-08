@@ -28,6 +28,8 @@ mod resources;
 mod screens;
 #[cfg(feature = "gui")]
 mod styles;
+#[cfg(feature = "gui")]
+mod update_check;
 mod worker;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;

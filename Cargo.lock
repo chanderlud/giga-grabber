@@ -1417,6 +1417,7 @@ dependencies = [
  "num-traits",
  "regex",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "simple-logging",
@@ -1424,6 +1425,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+ "webbrowser",
 ]
 
 [[package]]
@@ -4960,6 +4962,22 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webbrowser"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fc95580916af1e68ff6a7be07446fc5db73ebf71cf092de939bbf5f7e189f72"
+dependencies = [
+ "core-foundation 0.10.1",
+ "jni 0.22.4",
+ "log",
+ "ndk-context",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "url",
+ "web-sys",
 ]
 
 [[package]]

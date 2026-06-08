@@ -69,6 +69,8 @@ pub(crate) struct Config {
     pub(crate) min_retry_delay: Duration,
     pub(crate) proxy_mode: ProxyMode,
     pub(crate) proxies: Vec<Url>,
+    #[serde(default = "default_check_for_updates")]
+    pub(crate) check_for_updates: bool,
 }
 
 // default options
@@ -85,6 +87,7 @@ impl Default for Config {
             min_retry_delay: Duration::from_secs(10),
             proxy_mode: ProxyMode::None,
             proxies: Vec::new(),
+            check_for_updates: default_check_for_updates(),
         }
     }
 }
@@ -326,4 +329,61 @@ fn save_default() -> Config {
         error!("Failed to save default config: {save_error}",);
     }
     config
+}
+
+fn default_check_for_updates() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_config_json() -> serde_json::Value {
+        serde_json::to_value(Config::default()).expect("default config should serialize")
+    }
+
+    #[test]
+    fn missing_update_check_flag_defaults_to_enabled() {
+        let mut value = default_config_json();
+        value
+            .as_object_mut()
+            .expect("config should serialize as object")
+            .remove("check_for_updates");
+
+        let config: Config = serde_json::from_value(value).expect("legacy config should load");
+        assert!(config.check_for_updates);
+    }
+
+    #[test]
+    fn explicit_disabled_update_check_flag_is_preserved() {
+        let mut value = default_config_json();
+        value["check_for_updates"] = serde_json::Value::Bool(false);
+
+        let config: Config = serde_json::from_value(value).expect("config should load");
+        assert!(!config.check_for_updates);
+    }
+
+    #[test]
+    fn default_config_serializes_update_check_flag() {
+        let value = default_config_json();
+        assert_eq!(value["check_for_updates"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn proxy_validation_is_unchanged_when_update_check_flag_is_present() {
+        let mut config = Config {
+            proxy_mode: ProxyMode::Single,
+            proxies: vec![Url::parse("http://127.0.0.1:8080").expect("valid proxy URL")],
+            check_for_updates: false,
+            ..Config::default()
+        };
+        assert!(config.validate().is_ok());
+
+        config.proxies.clear();
+        assert_eq!(
+            config.validate(),
+            Err("proxy_mode is enabled but no proxies are configured".to_string())
+        );
+    }
 }

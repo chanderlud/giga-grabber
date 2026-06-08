@@ -6,7 +6,8 @@ use crate::resources::X_ICON;
 use crate::styles;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    Column, Row, button, container, pick_list, scrollable, slider, space, svg, text, text_input,
+    Column, Row, button, checkbox, container, pick_list, scrollable, slider, space, svg, text,
+    text_input,
 };
 use iced::{Element, Length, Theme};
 use native_dialog::FileDialogBuilder;
@@ -36,6 +37,8 @@ pub(crate) enum Message {
     AddProxies,
     RemoveProxy(usize),
     RebuildMega,
+    ToggleUpdateChecks(bool),
+    CheckForUpdates,
 }
 
 pub(crate) enum Action {
@@ -43,6 +46,7 @@ pub(crate) enum Action {
     ConfigSaved,
     RebuildRequired(Config),
     ShowError(String),
+    CheckForUpdates,
 }
 
 impl Settings {
@@ -144,6 +148,11 @@ impl Settings {
                 self.config.theme = theme;
                 Action::None
             }
+            Message::ToggleUpdateChecks(check_for_updates) => {
+                self.config.check_for_updates = check_for_updates;
+                Action::None
+            }
+            Message::CheckForUpdates => Action::CheckForUpdates,
             Message::ProxyModeChanged(proxy_mode) => {
                 if proxy_mode == ProxyMode::Single {
                     self.config.proxies.truncate(1);
@@ -274,6 +283,8 @@ impl Settings {
                         ),
                 )
                 .push(space::vertical().height(Length::Fixed(10_f32)))
+                .push(self.update_check_controls())
+                .push(space::vertical().height(Length::Fixed(10_f32)))
                 .push(self.settings_picklist(
                     "Proxy Mode",
                     &ProxyMode::ALL[..],
@@ -302,6 +313,44 @@ impl Settings {
                 ),
         )
         .into()
+    }
+
+    fn update_check_controls(&self) -> Element<'_, Message> {
+        Column::new()
+            .spacing(5)
+            .push(
+                Row::new()
+                    .height(Length::Fixed(30_f32))
+                    .push(space::horizontal().width(Length::Fixed(8_f32)))
+                    .push(
+                        text("Check for updates on startup")
+                            .align_y(Vertical::Center)
+                            .height(Length::Fill),
+                    )
+                    .push(space::horizontal())
+                    .push(
+                        checkbox(self.config.check_for_updates)
+                            .on_toggle(Message::ToggleUpdateChecks)
+                            .style(checkbox::primary),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .height(Length::Fixed(30_f32))
+                    .push(space::horizontal().width(Length::Fixed(8_f32)))
+                    .push(
+                        text("Updates")
+                            .align_y(Vertical::Center)
+                            .height(Length::Fill),
+                    )
+                    .push(space::horizontal())
+                    .push(
+                        button(" Check now ")
+                            .style(styles::button::primary)
+                            .on_press(Message::CheckForUpdates),
+                    ),
+            )
+            .into()
     }
 
     fn settings_slider<'a>(
@@ -431,5 +480,43 @@ impl Settings {
             .push(space::horizontal().width(Length::Fixed(8_f32)))
             .push(column)
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggling_update_checks_updates_config_without_rebuild() {
+        let mut settings = Settings::new(Config::default());
+        assert!(settings.config.check_for_updates);
+
+        let action = settings.update(Message::ToggleUpdateChecks(false));
+
+        assert!(matches!(action, Action::None));
+        assert!(!settings.config.check_for_updates);
+        assert!(!settings.rebuild_available);
+    }
+
+    #[test]
+    fn manual_update_check_emits_app_action() {
+        let mut settings = Settings::new(Config::default());
+
+        let action = settings.update(Message::CheckForUpdates);
+
+        assert!(matches!(action, Action::CheckForUpdates));
+    }
+
+    #[test]
+    fn resetting_settings_restores_update_checks_enabled() {
+        let mut config = Config::default();
+        config.check_for_updates = false;
+        let mut settings = Settings::new(config);
+
+        let action = settings.update(Message::ResetConfig);
+
+        assert!(matches!(action, Action::None));
+        assert!(settings.config.check_for_updates);
     }
 }

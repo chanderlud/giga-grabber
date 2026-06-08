@@ -1,3 +1,4 @@
+use crate::ProxyMode;
 #[cfg(feature = "gui")]
 use crate::RunnerMessage;
 #[cfg(feature = "gui")]
@@ -6,7 +7,10 @@ use crate::config::Config;
 use crate::mega_client::MegaClient;
 #[cfg(feature = "gui")]
 use crate::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
-use crate::{ProxyMode, styles};
+#[cfg(feature = "gui")]
+use crate::styles;
+#[cfg(feature = "gui")]
+use crate::update_check;
 #[cfg(feature = "gui")]
 use iced::futures::Stream;
 #[cfg(feature = "gui")]
@@ -20,9 +24,11 @@ use iced::{Element, Length, Theme, stream};
 use reqwest::{Client, Proxy};
 #[cfg(feature = "gui")]
 use std::collections::HashMap;
+#[cfg(feature = "gui")]
 use std::time::Duration;
 #[cfg(feature = "gui")]
 use tokio::sync::mpsc::{Sender, channel};
+#[cfg(feature = "gui")]
 use tokio::time::{MissedTickBehavior, interval};
 #[cfg(feature = "gui")]
 use tokio_util::sync::CancellationToken;
@@ -51,6 +57,19 @@ pub(crate) enum Message {
     Settings(SettingsMessage),
     /// remove any loaded files
     ClearFiles,
+    /// update check completed
+    UpdateCheckFinished(UpdateCheckKind, update_check::Outcome),
+    /// close the update notification modal
+    CloseUpdateNotification,
+    /// open the latest release page from the update notification
+    OpenUpdateRelease,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateCheckKind {
+    Automatic,
+    Manual,
 }
 
 #[cfg(feature = "gui")]

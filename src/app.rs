@@ -1,16 +1,17 @@
-use crate::components::{error_modal, nav_sidebar};
+use crate::components::{error_modal, nav_sidebar, update_modal};
 use crate::config::Config;
 use crate::helpers::*;
 use crate::mega_client::MegaClient;
 use crate::resources::*;
 use crate::screens::*;
+use crate::update_check;
 use crate::{Download, MegaFile, RunnerMessage, spawn_workers};
 use futures::future::join_all;
 use iced::font::{Family, Weight};
 use iced::time::every;
 use iced::widget::{Row, container, text};
 use iced::{Element, Font, Length, Subscription, Task, Theme};
-use log::error;
+use log::{error, warn};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,11 +37,13 @@ pub(crate) struct App {
     file_handles: HashSet<String>,
     route: Route,
     error_modal: Option<String>,
+    update_notification: Option<update_modal::Notification>,
+    update_check_in_flight: bool,
+    manual_update_feedback_pending: bool,
 }
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        let (download_sender, download_receiver) = kanal::unbounded();
         // load config from disk, falling back to a default config if needed
         let (mut config, mut error_modal) = Config::new();
         // build the mega client, falling back to default config if needed
@@ -54,23 +57,37 @@ impl App {
             }
         };
 
-        (
-            Self {
-                settings: Settings::new(config),
-                import: Import::new(),
-                choose_files: None,
-                home: Home::new(),
-                mega,
-                worker: None,
-                runner_sender: None,
-                download_sender,
-                download_receiver: download_receiver.to_async(),
-                file_handles: HashSet::new(),
-                route: Route::Home,
-                error_modal,
-            },
-            Task::none(),
-        )
+        let start_update_check = startup_update_check_enabled(&config);
+        let mut app = Self::from_parts(config, mega, error_modal);
+        let task = if start_update_check {
+            app.start_update_check(UpdateCheckKind::Automatic)
+        } else {
+            Task::none()
+        };
+
+        (app, task)
+    }
+
+    fn from_parts(config: Config, mega: MegaClient, error_modal: Option<String>) -> Self {
+        let (download_sender, download_receiver) = kanal::unbounded();
+
+        Self {
+            settings: Settings::new(config),
+            import: Import::new(),
+            choose_files: None,
+            home: Home::new(),
+            mega,
+            worker: None,
+            runner_sender: None,
+            download_sender,
+            download_receiver: download_receiver.to_async(),
+            file_handles: HashSet::new(),
+            route: Route::Home,
+            error_modal,
+            update_notification: None,
+            update_check_in_flight: false,
+            manual_update_feedback_pending: false,
+        }
     }
 
     fn title(&self) -> String {
@@ -211,6 +228,19 @@ impl App {
                 self.error_modal = None;
                 Task::none()
             }
+            Message::CloseUpdateNotification => {
+                self.update_notification = None;
+                Task::none()
+            }
+            Message::OpenUpdateRelease => {
+                if let Some(url) = self.update_release_url() {
+                    if let Err(error) = webbrowser::open(url) {
+                        self.error_modal = Some(format!("Failed to open release page: {error}"));
+                    }
+                }
+
+                Task::none()
+            }
             Message::Settings(msg) => {
                 use crate::screens::settings::Action;
                 match self.settings.update(msg) {
@@ -247,7 +277,12 @@ impl App {
                         self.error_modal = Some(error);
                         Task::none()
                     }
+                    Action::CheckForUpdates => self.start_update_check(UpdateCheckKind::Manual),
                 }
+            }
+            Message::UpdateCheckFinished(kind, outcome) => {
+                self.handle_update_check_finished(kind, outcome);
+                Task::none()
             }
             Message::ClearFiles => {
                 self.file_handles.clear(); // clear file handles tracking
@@ -293,10 +328,19 @@ impl App {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        if let Some(error_message) = &self.error_modal {
+        let content: Element<'_, Message> = if let Some(error_message) = &self.error_modal {
             error_modal::error_modal(error_message, body.into()).map(|_| Message::CloseModal)
         } else {
             body.into()
+        };
+
+        if let Some(notification) = &self.update_notification {
+            update_modal::update_modal(notification, content).map(|message| match message {
+                update_modal::Message::Dismiss => Message::CloseUpdateNotification,
+                update_modal::Message::OpenRelease => Message::OpenUpdateRelease,
+            })
+        } else {
+            content
         }
     }
 
@@ -315,6 +359,62 @@ impl App {
 
         // run all subscriptions in parallel
         Subscription::batch(vec![runner_subscription, refresh])
+    }
+
+    fn start_update_check(&mut self, kind: UpdateCheckKind) -> Task<Message> {
+        if self.update_check_in_flight {
+            if kind == UpdateCheckKind::Manual {
+                self.manual_update_feedback_pending = true;
+                self.update_notification = Some(update_modal::Notification::InProgress);
+            }
+            return Task::none();
+        }
+
+        self.update_check_in_flight = true;
+        Task::perform(update_check::check_latest_release(), move |outcome| {
+            Message::UpdateCheckFinished(kind, outcome)
+        })
+    }
+
+    fn handle_update_check_finished(
+        &mut self,
+        kind: UpdateCheckKind,
+        outcome: update_check::Outcome,
+    ) {
+        self.update_check_in_flight = false;
+        let should_show_feedback =
+            kind == UpdateCheckKind::Manual || self.manual_update_feedback_pending;
+        self.manual_update_feedback_pending = false;
+
+        match outcome {
+            update_check::Outcome::Available(info) => {
+                self.update_notification = Some(update_modal::Notification::Available(info));
+            }
+            update_check::Outcome::Current {
+                current_version,
+                latest_version,
+            } => {
+                if should_show_feedback {
+                    self.update_notification = Some(update_modal::Notification::Current {
+                        current_version,
+                        latest_version,
+                    });
+                }
+            }
+            update_check::Outcome::Failed(message) => {
+                if should_show_feedback {
+                    self.update_notification = Some(update_modal::Notification::Failed(message));
+                } else {
+                    warn!("automatic update check failed: {message}");
+                }
+            }
+        }
+    }
+
+    fn update_release_url(&self) -> Option<&str> {
+        self.update_notification
+            .as_ref()
+            .and_then(update_modal::Notification::release_url)
     }
 
     fn start_workers(&self, workers: usize) -> WorkerState {
@@ -390,6 +490,10 @@ impl App {
     }
 }
 
+fn startup_update_check_enabled(config: &Config) -> bool {
+    config.check_for_updates
+}
+
 /// builds the iced app
 pub(crate) fn build_app() -> iced::Application<impl iced::Program<Message = Message, Theme = Theme>>
 {
@@ -401,4 +505,131 @@ pub(crate) fn build_app() -> iced::Application<impl iced::Program<Message = Mess
         .font(CABIN_REGULAR)
         .font(INCONSOLATA_MEDIUM)
         .default_font(Font::with_name("Cabin"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::update_check::{Outcome, UpdateInfo};
+
+    fn test_app(config: Config) -> App {
+        let mega = mega_builder(&config).expect("default test config should build client");
+        App::from_parts(config, mega, None)
+    }
+
+    #[test]
+    fn startup_check_follows_config_flag() {
+        let mut config = Config::default();
+        assert!(startup_update_check_enabled(&config));
+
+        config.check_for_updates = false;
+        assert!(!startup_update_check_enabled(&config));
+    }
+
+    #[test]
+    fn manual_check_starts_even_when_auto_checks_are_disabled() {
+        let mut config = Config::default();
+        config.check_for_updates = false;
+        let mut app = test_app(config);
+
+        let _task = app.start_update_check(UpdateCheckKind::Manual);
+
+        assert!(app.update_check_in_flight);
+    }
+
+    #[test]
+    fn manual_request_during_automatic_check_gets_completion_feedback() {
+        let mut app = test_app(Config::default());
+        app.update_check_in_flight = true;
+
+        let _task = app.start_update_check(UpdateCheckKind::Manual);
+        assert!(app.manual_update_feedback_pending);
+        assert_eq!(
+            app.update_notification,
+            Some(update_modal::Notification::InProgress)
+        );
+
+        app.handle_update_check_finished(
+            UpdateCheckKind::Automatic,
+            Outcome::Current {
+                current_version: "1.3.2".to_string(),
+                latest_version: "1.3.2".to_string(),
+            },
+        );
+
+        assert!(!app.manual_update_feedback_pending);
+        assert_eq!(
+            app.update_notification,
+            Some(update_modal::Notification::Current {
+                current_version: "1.3.2".to_string(),
+                latest_version: "1.3.2".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn automatic_check_failure_does_not_replace_error_modal() {
+        let mut app = test_app(Config::default());
+        app.error_modal = Some("keep this error".to_string());
+        app.update_check_in_flight = true;
+
+        app.handle_update_check_finished(
+            UpdateCheckKind::Automatic,
+            Outcome::Failed("network unavailable".to_string()),
+        );
+
+        assert_eq!(app.error_modal, Some("keep this error".to_string()));
+        assert_eq!(app.update_notification, None);
+        assert!(!app.update_check_in_flight);
+    }
+
+    #[test]
+    fn manual_check_failure_produces_visible_notification() {
+        let mut app = test_app(Config::default());
+
+        app.handle_update_check_finished(
+            UpdateCheckKind::Manual,
+            Outcome::Failed("network unavailable".to_string()),
+        );
+
+        assert_eq!(
+            app.update_notification,
+            Some(update_modal::Notification::Failed(
+                "network unavailable".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn available_update_stores_release_url_for_action() {
+        let mut app = test_app(Config::default());
+
+        app.handle_update_check_finished(
+            UpdateCheckKind::Automatic,
+            Outcome::Available(UpdateInfo {
+                current_version: "1.3.2".to_string(),
+                latest_version: "1.3.3".to_string(),
+                tag: "v1.3.3".to_string(),
+                release_url: "https://github.com/chanderlud/giga-grabber/releases/tag/v1.3.3"
+                    .to_string(),
+            }),
+        );
+
+        assert_eq!(
+            app.update_release_url(),
+            Some("https://github.com/chanderlud/giga-grabber/releases/tag/v1.3.3")
+        );
+    }
+
+    #[test]
+    fn dismissing_update_notification_clears_only_update_state() {
+        let mut app = test_app(Config::default());
+        app.error_modal = Some("keep this error".to_string());
+        app.update_notification = Some(update_modal::Notification::InProgress);
+
+        let _task = app.update(Message::CloseUpdateNotification);
+
+        assert_eq!(app.error_modal, Some("keep this error".to_string()));
+        assert_eq!(app.update_notification, None);
+    }
 }
