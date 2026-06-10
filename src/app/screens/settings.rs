@@ -291,6 +291,27 @@ impl Settings {
                 ))
                 .push(space::vertical().height(Length::Fixed(10_f32)))
                 .push(self.proxy_selector())
+                .push(space::vertical().height(Length::Fixed(8_f32)))
+                .push(
+                    Row::new()
+                        .height(Length::Fixed(30_f32))
+                        .push(space::horizontal().width(Length::Fixed(8_f32)))
+                        .push(
+                            Column::new()
+                                .push(space::vertical().height(Length::Fill))
+                                .push(checkbox(self.config.check_for_updates)
+                                    .label("Automatically check for updates")
+                                    .on_toggle(Message::CheckForUpdatesChanged))
+                                .push(space::vertical().height(Length::Fill))
+                        )
+                        .push(space::horizontal().width(Length::Fixed(5_f32)))
+                        .push(
+                            button("Check now")
+                                .width(Length::Fixed(120_f32))
+                                .style(styles::button::primary)
+                                .on_press(Message::CheckForUpdates),
+                        ),
+                )
                 .push(space::vertical().height(Length::Fill))
                 .push(
                     Row::new()
@@ -307,24 +328,6 @@ impl Settings {
                             button(" Reset ")
                                 .style(styles::button::warning)
                                 .on_press(Message::ResetConfig),
-                        ),
-                )
-                .push(space::vertical().height(Length::Fixed(10_f32)))
-                .push(
-                    Row::new()
-                        .height(Length::Fixed(30_f32))
-                        .push(space::horizontal().width(Length::Fixed(8_f32)))
-                        .push(
-                            checkbox(self.config.check_for_updates)
-                                .label("Automatically check for updates")
-                                .on_toggle(Message::CheckForUpdatesChanged),
-                        )
-                        .push(space::horizontal())
-                        .push(
-                            button(" Check updates ")
-                                .width(Length::Fixed(120_f32))
-                                .style(styles::button::primary)
-                                .on_press(Message::CheckForUpdates),
                         ),
                 ),
         )

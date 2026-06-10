@@ -93,11 +93,10 @@ pub(crate) fn update_modal<'a, Message: Clone + 'a>(
                                         button(" Ok ")
                                             .style(button::secondary)
                                             .on_press(close_message.clone()),
-                                    )
-                                    .push(space::horizontal().width(Length::Fill)),
+                                    ),
                             ),
                     )
-                    .width(Length::Fixed(310_f32))
+                    .width(Length::Fixed(270_f32))
                     .padding(10)
                     .style(|theme| {
                         let palette = theme.extended_palette();
