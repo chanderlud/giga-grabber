@@ -6,3 +6,6 @@ giga-grabber.log
 downloads
 .DS_Store
 .context
+.omo
+.cursor
+.codegraph
