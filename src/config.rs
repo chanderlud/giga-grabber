@@ -61,6 +61,9 @@ impl std::error::Error for Error {}
 pub(crate) struct Config {
     #[cfg(feature = "gui")]
     pub(crate) theme: String,
+    #[cfg(feature = "gui")]
+    #[serde(default = "default_check_for_updates")]
+    pub(crate) check_for_updates: bool,
     pub(crate) max_workers: usize,
     pub(crate) concurrency_budget: usize,
     pub(crate) max_retries: u32,
@@ -77,6 +80,8 @@ impl Default for Config {
         Self {
             #[cfg(feature = "gui")]
             theme: "Vanilla".to_string(),
+            #[cfg(feature = "gui")]
+            check_for_updates: default_check_for_updates(),
             max_workers: 10,
             concurrency_budget: 10,
             max_retries: 3,
@@ -185,6 +190,11 @@ impl Config {
 
         Theme::ALL.iter().find(|t| t.name() == self.theme).cloned()
     }
+}
+
+#[cfg(feature = "gui")]
+fn default_check_for_updates() -> bool {
+    true
 }
 
 #[cfg(feature = "gui")]

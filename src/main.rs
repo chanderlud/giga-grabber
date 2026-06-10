@@ -17,6 +17,8 @@ mod app;
 mod cli;
 mod config;
 mod session;
+#[cfg(feature = "gui")]
+mod update_check;
 mod worker;
 
 type WorkerHandle = JoinHandle<anyhow::Result<()>>;
