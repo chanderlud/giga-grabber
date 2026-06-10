@@ -299,10 +299,12 @@ impl Settings {
                         .push(
                             Column::new()
                                 .push(space::vertical().height(Length::Fill))
-                                .push(checkbox(self.config.check_for_updates)
-                                    .label("Automatically check for updates")
-                                    .on_toggle(Message::CheckForUpdatesChanged))
-                                .push(space::vertical().height(Length::Fill))
+                                .push(
+                                    checkbox(self.config.check_for_updates)
+                                        .label("Automatically check for updates")
+                                        .on_toggle(Message::CheckForUpdatesChanged),
+                                )
+                                .push(space::vertical().height(Length::Fill)),
                         )
                         .push(space::horizontal().width(Length::Fixed(5_f32)))
                         .push(

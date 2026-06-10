@@ -1,4 +1,4 @@
-use crate::app::components::{error_modal, nav_sidebar};
+use crate::app::components::{modal, nav_sidebar};
 use crate::app::helpers::*;
 use crate::app::screens::*;
 use crate::config::Config;
@@ -369,14 +369,14 @@ impl App {
         .height(Length::Fill);
 
         if let Some(release) = &self.update_release {
-            error_modal::update_modal(
+            modal::update_modal(
                 &release.version,
                 body.into(),
                 Message::OpenUrl(release.url.clone()),
                 Message::CloseModal,
             )
         } else if let Some(error_message) = &self.error_modal {
-            error_modal::error_modal(error_message, body.into()).map(|_| Message::CloseModal)
+            modal::error_modal(error_message, body.into()).map(|_| Message::CloseModal)
         } else {
             body.into()
         }
