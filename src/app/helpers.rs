@@ -38,6 +38,7 @@ pub(crate) enum Message {
         manual: bool,
         result: Result<UpdateStatus, UpdateCheckError>,
     },
+    OpenUrl(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

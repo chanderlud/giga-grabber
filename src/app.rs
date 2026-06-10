@@ -3,7 +3,7 @@ use crate::app::helpers::*;
 use crate::app::screens::*;
 use crate::config::Config;
 use crate::mega_client::MegaClient;
-use crate::update_check::{self, UpdateCheckError, UpdateStatus};
+use crate::update_check::{self, ReleaseInfo, UpdateCheckError, UpdateStatus};
 use crate::worker::mega_client::mega_builder;
 use crate::{MegaFile, RunnerMessage, SessionEvent, TransferSession};
 use iced::font::{Family, Weight};
@@ -11,6 +11,7 @@ use iced::time::every;
 use iced::widget::{Row, container, text};
 use iced::{Element, Font, Length, Subscription, Task, Theme};
 use std::collections::HashSet;
+use std::process::Command;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
 
@@ -36,6 +37,7 @@ pub(crate) struct App {
     file_handles: HashSet<String>,
     route: Route,
     error_modal: Option<String>,
+    update_release: Option<ReleaseInfo>,
 }
 
 impl App {
@@ -65,6 +67,7 @@ impl App {
             file_handles: HashSet::new(),
             route: Route::Home,
             error_modal,
+            update_release: None,
         };
 
         let task = if check_for_updates {
@@ -242,6 +245,14 @@ impl App {
             }
             Message::CloseModal => {
                 self.error_modal = None;
+                self.update_release = None;
+                Task::none()
+            }
+            Message::OpenUrl(url) => {
+                self.update_release = None;
+                if let Err(error) = open_url_in_browser(&url) {
+                    self.error_modal = Some(error);
+                }
                 Task::none()
             }
             Message::Settings(msg) => {
@@ -303,10 +314,7 @@ impl App {
             Message::UpdateCheckFinished { manual, result } => {
                 match result {
                     Ok(UpdateStatus::Available(release)) => {
-                        self.error_modal = Some(format!(
-                            "Giga Grabber {} is available. Download it from {}",
-                            release.version, release.url
-                        ));
+                        self.update_release = Some(release);
                     }
                     Ok(UpdateStatus::Current) if manual => {
                         self.error_modal = Some("Giga Grabber is up to date".to_string());
@@ -360,7 +368,14 @@ impl App {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        if let Some(error_message) = &self.error_modal {
+        if let Some(release) = &self.update_release {
+            error_modal::update_modal(
+                &release.version,
+                body.into(),
+                Message::OpenUrl(release.url.clone()),
+                Message::CloseModal,
+            )
+        } else if let Some(error_message) = &self.error_modal {
             error_modal::error_modal(error_message, body.into()).map(|_| Message::CloseModal)
         } else {
             body.into()
@@ -413,6 +428,38 @@ impl App {
             self.session = None;
         }
     }
+}
+
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    let mut command = browser_command(url);
+    match command.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!(
+            "Failed to open release page: browser exited with {status}"
+        )),
+        Err(error) => Err(format!("Failed to open release page: {error}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("cmd");
+    command.args(["/C", "start", "", url]);
+    command
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
 }
 
 /// builds the iced app

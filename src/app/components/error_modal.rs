@@ -59,3 +59,70 @@ pub(crate) fn error_modal<'a, Message: 'a>(
     ]
     .into()
 }
+
+pub(crate) fn update_modal<'a, Message: Clone + 'a>(
+    version: &'a str,
+    content: Element<'a, Message>,
+    open_message: Message,
+    close_message: Message,
+) -> Element<'a, Message> {
+    stack![
+        content,
+        opaque(
+            mouse_area(
+                center(opaque(
+                    container(
+                        Column::new()
+                            .spacing(10)
+                            .push(
+                                text(format!("Giga Grabber {version} is available"))
+                                    .size(18)
+                                    .align_y(Vertical::Center)
+                                    .align_x(Horizontal::Center),
+                            )
+                            .push(
+                                Row::new()
+                                    .spacing(8)
+                                    .push(space::horizontal().width(Length::Fill))
+                                    .push(
+                                        button(" Open release ")
+                                            .style(button::primary)
+                                            .on_press(open_message),
+                                    )
+                                    .push(
+                                        button(" Ok ")
+                                            .style(button::secondary)
+                                            .on_press(close_message.clone()),
+                                    )
+                                    .push(space::horizontal().width(Length::Fill)),
+                            ),
+                    )
+                    .width(Length::Fixed(310_f32))
+                    .padding(10)
+                    .style(|theme| {
+                        let palette = theme.extended_palette();
+
+                        container::Style {
+                            background: Some(palette.background.weak.color.into()),
+                            text_color: Some(palette.background.weak.text),
+                            border: border::rounded(8),
+                            ..Default::default()
+                        }
+                    })
+                ))
+                .style(|_theme| container::Style {
+                    background: Some(
+                        Color {
+                            a: 0.5,
+                            ..Color::BLACK
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
+                })
+            )
+            .on_press(close_message)
+        )
+    ]
+    .into()
+}
