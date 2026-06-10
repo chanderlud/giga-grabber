@@ -1,5 +1,6 @@
 use crate::app::screens::{ChooseFilesMessage, HomeMessage, ImportMessage, SettingsMessage};
 use crate::app::styles;
+use crate::update_check::{UpdateCheckError, UpdateStatus};
 use crate::worker::RunnerMessage;
 use futures::{SinkExt, Stream};
 use iced::widget::svg::Status;
@@ -33,6 +34,10 @@ pub(crate) enum Message {
     Settings(SettingsMessage),
     /// remove any loaded files
     ClearFiles,
+    UpdateCheckFinished {
+        manual: bool,
+        result: Result<UpdateStatus, UpdateCheckError>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

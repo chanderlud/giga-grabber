@@ -3,6 +3,7 @@ use crate::app::helpers::*;
 use crate::app::screens::*;
 use crate::config::Config;
 use crate::mega_client::MegaClient;
+use crate::update_check::{self, UpdateCheckError, UpdateStatus};
 use crate::worker::mega_client::mega_builder;
 use crate::{MegaFile, RunnerMessage, SessionEvent, TransferSession};
 use iced::font::{Family, Weight};
@@ -52,21 +53,27 @@ impl App {
             }
         };
 
-        (
-            Self {
-                settings: Settings::new(config),
-                import: Import::new(),
-                choose_files: None,
-                home: Home::new(),
-                mega,
-                session: None,
-                runner_sender: None,
-                file_handles: HashSet::new(),
-                route: Route::Home,
-                error_modal,
-            },
-            Task::none(),
-        )
+        let check_for_updates = config.check_for_updates;
+        let app = Self {
+            settings: Settings::new(config),
+            import: Import::new(),
+            choose_files: None,
+            home: Home::new(),
+            mega,
+            session: None,
+            runner_sender: None,
+            file_handles: HashSet::new(),
+            route: Route::Home,
+            error_modal,
+        };
+
+        let task = if check_for_updates {
+            Self::check_for_updates(false)
+        } else {
+            Task::none()
+        };
+
+        (app, task)
     }
 
     fn title(&self) -> String {
@@ -241,6 +248,7 @@ impl App {
                 match self.settings.update(msg) {
                     SettingsAction::None => Task::none(),
                     SettingsAction::ConfigSaved => Task::none(),
+                    SettingsAction::CheckForUpdates => Self::check_for_updates(true),
                     SettingsAction::RebuildRequired(config) => {
                         // if the worker is active, do not rebuild
                         if self
@@ -292,7 +300,37 @@ impl App {
 
                 Task::none()
             }
+            Message::UpdateCheckFinished { manual, result } => {
+                match result {
+                    Ok(UpdateStatus::Available(release)) => {
+                        self.error_modal = Some(format!(
+                            "Giga Grabber {} is available. Download it from {}",
+                            release.version, release.url
+                        ));
+                    }
+                    Ok(UpdateStatus::Current) if manual => {
+                        self.error_modal = Some("Giga Grabber is up to date".to_string());
+                    }
+                    Err(error) if manual => {
+                        self.error_modal = Some(format!("Failed to check for updates: {error}"));
+                    }
+                    Ok(UpdateStatus::Current) | Err(_) => {}
+                }
+
+                Task::none()
+            }
         }
+    }
+
+    fn check_for_updates(manual: bool) -> Task<Message> {
+        Task::perform(
+            async {
+                update_check::check_latest_release()
+                    .await
+                    .map_err(UpdateCheckError::new)
+            },
+            move |result| Message::UpdateCheckFinished { manual, result },
+        )
     }
 
     fn view(&self) -> Element<'_, Message> {
