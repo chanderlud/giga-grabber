@@ -414,6 +414,11 @@ impl App {
                     SessionEvent::Error(error) => {
                         self.home.add_error(error);
                     }
+                    SessionEvent::OutOfBandwidth(error) => {
+                        self.home.add_error(error.clone());
+                        self.home.update(HomeMessage::PauseDownloads);
+                        self.error_modal = Some(error);
+                    }
                     SessionEvent::Drained => {
                         drained = true;
                     }

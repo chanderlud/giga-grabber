@@ -14,6 +14,7 @@ pub(crate) enum SessionEvent {
     TransferActive(Download),
     TransferTerminal(String),
     Error(String),
+    OutOfBandwidth(String),
     Drained,
 }
 
@@ -143,6 +144,10 @@ impl<D: DownloadDriver> TransferSession<D> {
             RunnerMessage::Error { session_id, error } if session_id == self.id => {
                 events.push(SessionEvent::Error(error))
             }
+            RunnerMessage::OutOfBandwidth { session_id, error } if session_id == self.id => {
+                self.pause_all_transfers();
+                events.push(SessionEvent::OutOfBandwidth(error));
+            }
             RunnerMessage::Finished if self.transfers.is_empty() => {
                 events.push(SessionEvent::Drained);
             }
@@ -203,6 +208,12 @@ impl<D: DownloadDriver> TransferSession<D> {
     fn drain_download_queue(&mut self) {
         while let Ok(Some(download)) = self.download_receiver.try_recv() {
             download.cancel();
+        }
+    }
+
+    fn pause_all_transfers(&self) {
+        for download in self.transfers.values() {
+            download.pause();
         }
     }
 }
@@ -422,6 +433,36 @@ mod tests {
 
         assert!(!session.has_live_transfers());
         session.finish().await;
+    }
+
+    #[tokio::test]
+    async fn test_session_out_of_bandwidth_pauses_tracked_downloads() {
+        let temp = TempDir::new().expect("temp dir");
+        let first = make_download("bandwidth-first.bin", 1024, temp.path().to_path_buf());
+        let second = make_download("bandwidth-second.bin", 1024, temp.path().to_path_buf());
+        let mut session = TransferSession::new(
+            make_driver(vec![DriverAction::Hang, DriverAction::Hang]),
+            Config::default(),
+        );
+        let (runner_sender, _runner_receiver) = channel(64);
+        session.set_runner_sender(runner_sender);
+        session
+            .add_downloads(vec![first.clone(), second.clone()])
+            .expect("queue downloads");
+
+        let events = session.handle_runner_message(RunnerMessage::OutOfBandwidth {
+            session_id: session.id,
+            error: "MEGA is out of bandwidth".to_string(),
+        });
+
+        assert!(matches!(
+            events.as_slice(),
+            [SessionEvent::OutOfBandwidth(error)] if error.contains("out of bandwidth")
+        ));
+        assert!(first.is_paused());
+        assert!(second.is_paused());
+
+        session.abort_background();
     }
 
     #[tokio::test]

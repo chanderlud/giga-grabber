@@ -1,6 +1,6 @@
 use crate::ProxyMode;
 use crate::config::Config;
-use crate::worker::{Download, PauseState};
+use crate::worker::{Download, OutOfBandwidthError, PauseState};
 use aes::Aes128;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
@@ -12,7 +12,7 @@ use cipher::{BlockDecrypt, BlockDecryptMut, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use futures::StreamExt;
 use log::error;
-use reqwest::{Client, Proxy, header};
+use reqwest::{Client, Proxy, StatusCode, header};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
@@ -211,10 +211,11 @@ impl MegaClient {
                 return Ok(false);
             }
             result = req.send() => {
-                result
-                    .context("MEGA file download request failed")?
-                    .error_for_status()
-                    .context("MEGA file download HTTP error")?
+                let response = result.context("MEGA file download request failed")?;
+                if is_out_of_bandwidth_status(response.status()) {
+                    return Err(OutOfBandwidthError.into());
+                }
+                response.error_for_status().context("MEGA file download HTTP error")?
             }
         };
 
@@ -595,6 +596,10 @@ impl MegaClient {
 
         Ok(nodes_map)
     }
+}
+
+fn is_out_of_bandwidth_status(status: StatusCode) -> bool {
+    status.as_u16() == 509
 }
 
 /// Internal request enum for MEGA `cs` calls
