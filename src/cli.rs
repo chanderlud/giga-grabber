@@ -208,6 +208,7 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<()> {
         }
     });
 
+    let mut out_of_bandwidth = false;
     while let Some(msg) = message_receiver.recv().await {
         let events = session.handle_runner_message(msg);
         let mut drained = false;
@@ -225,6 +226,11 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<()> {
                 SessionEvent::Error(err) => {
                     pb.println(format!("Error: {err}"));
                 }
+                SessionEvent::OutOfBandwidth(err) => {
+                    pb.println(format!("Error: {err}"));
+                    out_of_bandwidth = true;
+                    drained = true;
+                }
                 SessionEvent::Drained => {
                     drained = true;
                 }
@@ -237,9 +243,14 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<()> {
     }
 
     session.finish().await;
+    if !progress_task.is_finished() {
+        progress_task.abort();
+    }
     let _ = progress_task.await;
 
-    if total_bytes > 0 {
+    if out_of_bandwidth {
+        pb.finish_with_message("Downloads paused: MEGA is out of bandwidth");
+    } else if total_bytes > 0 {
         pb.finish_with_message("Download complete");
     } else {
         pb.finish_with_message("Download(s) complete");
