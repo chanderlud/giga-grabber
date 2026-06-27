@@ -2,6 +2,8 @@ use crate::config::Config;
 use crate::worker::mega_client::MegaClient;
 use crate::{MegaFile, WorkerHandle};
 use log::error;
+use std::error::Error;
+use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -138,11 +140,24 @@ impl Download {
 #[derive(Debug, Clone)]
 pub(crate) enum RunnerMessage {
     /// notifies UI that this download has become active
-    Active { session_id: u64, download: Download },
+    Active {
+        session_id: u64,
+        download: Download,
+    },
     /// notifies the UI that this download is finished
-    Inactive { session_id: u64, handle: String },
+    Inactive {
+        session_id: u64,
+        handle: String,
+    },
     /// notifies the UI when non-critical errors bubble up
-    Error { session_id: u64, error: String },
+    Error {
+        session_id: u64,
+        error: String,
+    },
+    OutOfBandwidth {
+        session_id: u64,
+        error: String,
+    },
     /// may be emitted during shutdown
     Finished,
 }
@@ -154,6 +169,17 @@ pub(crate) enum RetryDecision {
     TryNow,
     GiveUp,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OutOfBandwidthError;
+
+impl fmt::Display for OutOfBandwidthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MEGA is out of bandwidth. Downloads have been paused until the daily transfer limit resets.")
+    }
+}
+
+impl Error for OutOfBandwidthError {}
 
 pub(crate) trait DownloadDriver: Send + Sync + Clone + 'static {
     fn download_file(
@@ -383,6 +409,44 @@ pub(crate) async fn worker<D: DownloadDriver>(
                             }
                             Err(error) => {
                                 error!("Error downloading file: {error:?}");
+                                if error.downcast_ref::<OutOfBandwidthError>().is_some() {
+                                    download.pause();
+                                    download.mark_paused_if_requested();
+                                    message_sender
+                                        .send(RunnerMessage::OutOfBandwidth {
+                                            session_id,
+                                            error: error.to_string(),
+                                        })
+                                        .await?;
+
+                                    let mut pause_receiver = download.pause_receiver();
+                                    loop {
+                                        if *pause_receiver.borrow() == PauseState::Running {
+                                            break;
+                                        }
+
+                                        select! {
+                                            _ = cancellation_token.cancelled() => break 'worker,
+                                            _ = download.stop.cancelled() => {
+                                                message_sender
+                                                    .send(RunnerMessage::Inactive {
+                                                        session_id,
+                                                        handle: download.node.handle.clone(),
+                                                    })
+                                                    .await?;
+                                                continue 'worker;
+                                            }
+                                            result = pause_receiver.changed() => {
+                                                if result.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    download_sender.send(download).await?;
+                                    continue;
+                                }
                                 // keep track of per-download retries
                                 download.set_retried().await;
                                 // report error to UI

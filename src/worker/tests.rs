@@ -286,6 +286,113 @@ async fn spawn_local_mega_fixture(
     (base_url, state, shutdown, server)
 }
 
+async fn spawn_local_mega_bandwidth_limit_fixture() -> (
+    Url,
+    Arc<AtomicUsize>,
+    CancellationToken,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local fixture");
+    let addr = listener.local_addr().expect("fixture local addr");
+    let base_url = Url::parse(&format!("http://{addr}/")).expect("fixture base URL");
+    let download_requests = Arc::new(AtomicUsize::new(0));
+    let requests_for_task = download_requests.clone();
+    let shutdown = CancellationToken::new();
+    let shutdown_for_task = shutdown.clone();
+
+    let server = tokio::spawn(async move {
+        loop {
+            let accept_result = tokio::select! {
+                _ = shutdown_for_task.cancelled() => break,
+                result = listener.accept() => result,
+            };
+            let Ok((mut socket, _)) = accept_result else {
+                break;
+            };
+
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 2048];
+            let header_end = loop {
+                let read = match socket.read(&mut buf).await {
+                    Ok(0) => break None,
+                    Ok(n) => n,
+                    Err(_) => break None,
+                };
+                request.extend_from_slice(&buf[..read]);
+                if let Some(idx) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(idx + 4);
+                }
+            };
+            let Some(header_end) = header_end else {
+                continue;
+            };
+
+            let request_head = String::from_utf8_lossy(&request[..header_end]);
+            let mut lines = request_head.split("\r\n");
+            let request_line = lines.next().unwrap_or_default();
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or_default();
+            let path = parts.next().unwrap_or_default();
+
+            let mut content_length = 0usize;
+            for line in lines {
+                if line.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap_or(0);
+                }
+            }
+
+            let body_read = request.len().saturating_sub(header_end);
+            if content_length > body_read {
+                let mut remaining = content_length - body_read;
+                while remaining > 0 {
+                    let read = match socket.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    remaining = remaining.saturating_sub(read);
+                }
+            }
+
+            if method == "POST" && path.starts_with("/cs") {
+                let cs_body = format!(r#"[{{"g":"http://{addr}/file","s":1024,"at":"QQ"}}]"#);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cs_body.len(),
+                    cs_body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                continue;
+            }
+
+            if method == "GET" && path == "/file" {
+                requests_for_task.fetch_add(1, Ordering::SeqCst);
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 509 Bandwidth Limit Exceeded\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await;
+                continue;
+            }
+
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        }
+    });
+
+    (base_url, download_requests, shutdown, server)
+}
+
 #[tokio::test]
 async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_complete() {
     let temp = TempDir::new().expect("temp dir");
@@ -372,6 +479,69 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
         .await
         .expect("fixture task join timeout")
         .expect("fixture task join failure");
+}
+
+#[tokio::test]
+async fn test_real_mega_client_509_pauses_without_retrying() {
+    let temp = TempDir::new().expect("temp dir");
+    let (base_url, download_requests, fixture_shutdown, fixture_task) =
+        spawn_local_mega_bandwidth_limit_fixture().await;
+
+    let download = make_download("bandwidth-limit.bin", 1024, temp.path().to_path_buf());
+    let (download_sender, download_receiver) = kanal::unbounded_async();
+    let (message_sender, mut message_receiver) = channel(64);
+    let cancel = CancellationToken::new();
+    let config = Arc::new(Config {
+        max_retries: 3,
+        min_retry_delay: Duration::ZERO,
+        max_retry_delay: Duration::ZERO,
+        ..Default::default()
+    });
+    let mega = MegaClient::with_origin(reqwest::Client::new(), base_url);
+
+    let workers = spawn_workers(
+        mega,
+        config,
+        download_receiver,
+        download_sender.clone(),
+        (message_sender, 0),
+        cancel.clone(),
+        1,
+    );
+
+    download_sender
+        .send(download.clone())
+        .await
+        .expect("enqueue download");
+
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Active { .. }
+    ));
+
+    match next_message(&mut message_receiver).await {
+        RunnerMessage::OutOfBandwidth { error, .. } => {
+            assert!(error.contains("out of bandwidth"));
+        }
+        message => panic!("expected out-of-bandwidth message, got {message:?}"),
+    }
+
+    wait_for_paused(&download).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(download_requests.load(Ordering::SeqCst), 1);
+
+    download.stop.cancel();
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Inactive { .. }
+    ));
+
+    cancel.cancel();
+    for worker in workers {
+        worker.await.expect("worker join").expect("worker result");
+    }
+    fixture_shutdown.cancel();
+    fixture_task.await.expect("fixture join");
 }
 
 #[tokio::test]
@@ -725,7 +895,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                 }
                 active_handles.remove(&handle);
             }
-            RunnerMessage::Error { .. } => (),
+            RunnerMessage::Error { .. } | RunnerMessage::OutOfBandwidth { .. } => (),
             RunnerMessage::Finished => (),
         }
     }
@@ -748,7 +918,7 @@ async fn test_cancel_during_pause_requeue_emits_single_inactive_and_clears_activ
                     }
                     active_handles.remove(&handle);
                 }
-                RunnerMessage::Error { .. } => (),
+                RunnerMessage::Error { .. } | RunnerMessage::OutOfBandwidth { .. } => (),
                 RunnerMessage::Finished => (),
             }
         }
@@ -882,7 +1052,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                 }
                 active_handles.remove(&handle);
             }
-            RunnerMessage::Error { .. } => (),
+            RunnerMessage::Error { .. } | RunnerMessage::OutOfBandwidth { .. } => (),
             RunnerMessage::Finished => (),
         }
     }
@@ -905,7 +1075,7 @@ async fn test_cancel_during_retry_requeue_emits_single_inactive_and_clears_activ
                     }
                     active_handles.remove(&handle);
                 }
-                RunnerMessage::Error { .. } => (),
+                RunnerMessage::Error { .. } | RunnerMessage::OutOfBandwidth { .. } => (),
                 RunnerMessage::Finished => (),
             }
         }
@@ -982,6 +1152,7 @@ async fn test_rename_failure_is_reported_and_not_marked_inactive_immediately() {
                     saw_max_retries_error = true;
                 }
             }
+            RunnerMessage::OutOfBandwidth { .. } => (),
             RunnerMessage::Inactive { .. } => saw_inactive = true,
             RunnerMessage::Active { .. } => (),
             RunnerMessage::Finished => (),
@@ -1038,6 +1209,7 @@ async fn test_max_retries_exceeded() {
                     saw_max_retries_error = true;
                 }
             }
+            RunnerMessage::OutOfBandwidth { .. } => (),
             RunnerMessage::Inactive { .. } => saw_inactive = true,
             RunnerMessage::Active { .. } => (),
             RunnerMessage::Finished => (),
@@ -1145,7 +1317,7 @@ async fn test_concurrency_semaphore_limits() {
                 active_count = active_count.saturating_sub(1);
                 inactive_count += 1;
             }
-            RunnerMessage::Error { .. } => (),
+            RunnerMessage::Error { .. } | RunnerMessage::OutOfBandwidth { .. } => (),
             RunnerMessage::Finished => (),
         }
     }
