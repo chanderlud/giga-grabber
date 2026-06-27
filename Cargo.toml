@@ -6,13 +6,13 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aes = "0.8"
+aes = "0.9.1"
 anyhow = "1"
 base64 = "0.22"
-cbc = { version = "0.1", features = ["alloc"] }
-cipher = "0.4"
+cbc = { version = "0.2.1", features = ["alloc"] }
+cipher = "0.5.2"
 clap = { version = "4.5", features = ["derive"] }
-ctr = "0.9"
+ctr = "0.10.1"
 fastrand = "2"
 futures = "0.3"
 iced = { version = "0.14.0", optional = true, features = ["tokio", "canvas", "svg", "advanced"] }

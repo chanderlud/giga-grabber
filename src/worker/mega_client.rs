@@ -6,9 +6,10 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cbc::Decryptor;
+use cipher::BlockCipherDecrypt;
 use cipher::KeyInit;
 use cipher::StreamCipherSeek;
-use cipher::{BlockDecrypt, BlockDecryptMut, KeyIvInit, StreamCipher};
+use cipher::{BlockModeDecrypt, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use futures::StreamExt;
 use log::error;
@@ -745,9 +746,12 @@ fn parse_public_link(url: &str) -> Result<ParsedPublicLink> {
 }
 
 /// AES-ECB decrypt `data` in-place using `key`
-fn decrypt_ebc_in_place(key: &[u8], data: &mut [u8]) {
+fn decrypt_ebc_in_place(key: &[u8; 16], data: &mut [u8]) {
     let aes = Aes128::new(key.into());
-    for block in data.chunks_mut(16) {
+    for block in data.chunks_exact_mut(16) {
+        let block: &mut [u8; 16] = block
+            .try_into()
+            .expect("chunks_exact_mut yields 16-byte blocks");
         aes.decrypt_block(block.into());
     }
 }
@@ -834,7 +838,10 @@ fn decrypt_attrs(aes_key: &[u8; 16], attr_b64: &str) -> Result<String> {
 
     let mut cbc = Decryptor::<Aes128>::new(aes_key.into(), &Default::default());
     for chunk in buf.chunks_exact_mut(16) {
-        cbc.decrypt_block_mut(chunk.into());
+        let block: &mut [u8; 16] = chunk
+            .try_into()
+            .expect("chunks_exact_mut yields 16-byte blocks");
+        cbc.decrypt_block(block.into());
     }
 
     if &buf[..4] != b"MEGA" {
@@ -865,9 +872,8 @@ async fn pause_loop(pause_receiver: &mut watch::Receiver<PauseState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes::cipher::BlockEncrypt;
     use cbc::Encryptor;
-    use cipher::{BlockEncryptMut, KeyIvInit};
+    use cipher::{BlockCipherEncrypt, BlockModeEncrypt, KeyIvInit};
     use serde_json::json;
     use std::collections::BTreeMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -876,7 +882,10 @@ mod tests {
 
     fn ecb_encrypt_in_place(key: &[u8; 16], data: &mut [u8]) {
         let aes = Aes128::new(key.into());
-        for block in data.chunks_mut(16) {
+        for block in data.chunks_exact_mut(16) {
+            let block: &mut [u8; 16] = block
+                .try_into()
+                .expect("chunks_exact_mut yields 16-byte blocks");
             aes.encrypt_block(block.into());
         }
     }
@@ -903,7 +912,10 @@ mod tests {
 
         let mut cbc = Encryptor::<Aes128>::new(aes_key.into(), &Default::default());
         for chunk in plain.chunks_exact_mut(16) {
-            cbc.encrypt_block_mut(chunk.into());
+            let block: &mut [u8; 16] = chunk
+                .try_into()
+                .expect("chunks_exact_mut yields 16-byte blocks");
+            cbc.encrypt_block(block.into());
         }
         URL_SAFE_NO_PAD.encode(plain)
     }
