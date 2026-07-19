@@ -59,8 +59,7 @@ Options:
 Release binaries include GitHub Actions build provenance. After downloading a release asset, verify it with the GitHub CLI:
 
 ```shell
-gh release verify-asset v<VERSION> ./<RELEASE_ASSET> \
-  --repo chanderlud/giga-grabber
+gh attestation verify --owner chanderlud <filename-or-url>
 ```
 
 Replace `<VERSION>` with the release tag's version and `<RELEASE_ASSET>` with the downloaded file name. Verification succeeds only when the asset matches a valid attestation for the release.
