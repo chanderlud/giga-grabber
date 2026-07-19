@@ -7,6 +7,16 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# contents: create the GitHub Release (release job)
+# id-token: mint OIDC token for Sigstore signing
+# attestations: persist signed attestations
+# artifact-metadata: create artifact storage record
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -62,9 +72,15 @@ jobs:
           Write-Host "Output: $out"
           Move-Item "target/release/giga_grabber.exe" "target/release/$out"
 
+      - name: Attest Windows binary
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
+        uses: actions/attest@v4
+        with:
+          subject-path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-windows-standalone-x86_64.exe
+
       - name: Upload Windows artifact
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: giga-grabber-${{ steps.vars.outputs.version }}-windows-standalone-x86_64
           path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-windows-standalone-x86_64.exe
@@ -77,6 +93,12 @@ jobs:
           OUT="giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64"
           echo "Output: ${OUT}"
           mv target/release/giga_grabber "target/release/${OUT}"
+
+      - name: Attest Linux binary
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+        uses: actions/attest@v4
+        with:
+          subject-path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-linux-standalone-x86_64
 
       - name: Upload Linux artifact
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
@@ -93,6 +115,12 @@ jobs:
           OUT="giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64"
           echo "Output: ${OUT}"
           mv target/release/giga_grabber "target/release/${OUT}"
+
+      - name: Attest macOS binary
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
+        uses: actions/attest@v4
+        with:
+          subject-path: target/release/giga-grabber-${{ steps.vars.outputs.version }}-macos-standalone-aarch64
 
       - name: Upload macOS artifact
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
@@ -113,7 +141,7 @@ jobs:
           path: dist
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
