@@ -62,8 +62,6 @@ Release binaries include GitHub Actions build provenance. After downloading a re
 gh attestation verify --owner chanderlud <filename-or-url>
 ```
 
-Replace `<VERSION>` with the release tag's version and `<RELEASE_ASSET>` with the downloaded file name. Verification succeeds only when the asset matches a valid attestation for the release.
-
 ## Contributing
 All contributions are welcome.
 
