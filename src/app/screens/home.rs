@@ -83,7 +83,7 @@ impl Home {
             }
             Message::PauseDownloads => {
                 self.all_paused = true;
-                for (_, download) in self.active_downloads.iter() {
+                for download in self.active_downloads.values() {
                     download.pause();
                 }
                 Action::None
@@ -96,7 +96,7 @@ impl Home {
             }
             Message::ResumeDownloads => {
                 self.all_paused = false;
-                for (_, download) in self.active_downloads.iter() {
+                for download in self.active_downloads.values() {
                     download.resume();
                 }
                 Action::None
