@@ -17,6 +17,7 @@ mod app;
 mod cli;
 mod config;
 mod session;
+mod session_persistence;
 #[cfg(feature = "gui")]
 mod update_check;
 mod worker;

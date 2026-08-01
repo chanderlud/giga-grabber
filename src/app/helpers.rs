@@ -26,6 +26,9 @@ pub(crate) enum Message {
     RunnerBatch(Vec<RunnerMessage>),
     /// runner subscription is ready, provides sender for workers
     RunnerReady(Sender<RunnerMessage>),
+    CloseRequested,
+    CloseSnapshotFinished(Result<(), String>),
+    RestoreFinished(Result<crate::app::RestoredDownloads, String>),
     /// navigate to a different route
     Navigate(Route),
     /// close the error modal

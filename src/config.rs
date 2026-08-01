@@ -64,6 +64,9 @@ pub(crate) struct Config {
     #[cfg(feature = "gui")]
     #[serde(default = "default_check_for_updates")]
     pub(crate) check_for_updates: bool,
+    #[cfg(feature = "gui")]
+    #[serde(default)]
+    pub(crate) persist_download_sessions: bool,
     pub(crate) max_workers: usize,
     pub(crate) concurrency_budget: usize,
     pub(crate) max_retries: u32,
@@ -82,6 +85,8 @@ impl Default for Config {
             theme: "Vanilla".to_string(),
             #[cfg(feature = "gui")]
             check_for_updates: default_check_for_updates(),
+            #[cfg(feature = "gui")]
+            persist_download_sessions: false,
             max_workers: 10,
             concurrency_budget: 10,
             max_retries: 3,

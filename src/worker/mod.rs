@@ -5,11 +5,12 @@ use log::error;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::fs::{create_dir_all, rename, try_exists};
+use tokio::fs::{create_dir_all, metadata, rename, try_exists};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{Mutex, RwLock, Semaphore, watch};
 use tokio::time::{Instant, sleep};
@@ -50,6 +51,45 @@ impl Download {
             retries: Default::default(),
             last_tried_at: Default::default(),
         }
+    }
+
+    pub(crate) async fn restore(file: &MegaFile) -> io::Result<Option<Self>> {
+        let download = Self::new(file);
+        download.pause();
+
+        match metadata(download.final_path()).await {
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let completed = match metadata(download.partial_path()).await {
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            Ok(_) => 0,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error),
+        };
+        download.set_downloaded(completed);
+
+        Ok(Some(download))
+    }
+
+    fn destination_path(&self) -> PathBuf {
+        Path::new("downloads").join(&self.file_path)
+    }
+
+    fn partial_path(&self) -> PathBuf {
+        self.destination_path()
+            .join(format!("{}.partial", self.node.name))
+    }
+
+    fn final_path(&self) -> PathBuf {
+        self.destination_path().join(&self.node.name)
+    }
+
+    pub(crate) fn set_downloaded(&self, completed: u64) {
+        let completed = usize::try_from(completed.min(self.node.size)).unwrap_or(usize::MAX);
+        self.downloaded.store(completed, Ordering::Relaxed);
     }
 }
 
@@ -258,6 +298,16 @@ pub(crate) async fn worker<D: DownloadDriver>(
                     continue;
                 }
 
+                if download.mark_paused_if_requested() {
+                    select! {
+                        _ = cancellation_token.cancelled() => break,
+                        _ = download.stop.cancelled() => continue,
+                        _ = sleep(Duration::from_millis(10)) => (),
+                    }
+                    download_sender.send(download).await?;
+                    continue;
+                }
+
                 let since_last_retry = download.last_tried_at.lock().await.as_ref().map(|i| i.elapsed());
                 if let Some(elapsed) = since_last_retry {
                     let retries = download.retries.load(Ordering::Relaxed);
@@ -298,14 +348,14 @@ pub(crate) async fn worker<D: DownloadDriver>(
                 }
 
                 // create file path for the node
-                let file_path = Path::new("downloads").join(&download.file_path);
+                let file_path = download.destination_path();
                 // create folders if needed
                 create_dir_all(&file_path).await?;
 
                 // full file path to partial file
-                let partial_path = file_path.join(format!("{}.partial", download.node.name));
+                let partial_path = download.partial_path();
                 // full path to final destination
-                let full_path = file_path.join(&download.node.name);
+                let full_path = download.final_path();
                 // this download is already complete
                 if try_exists(&full_path).await? {
                     // report as Inactive to help CLI track completion

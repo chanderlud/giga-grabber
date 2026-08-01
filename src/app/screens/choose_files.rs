@@ -1,4 +1,5 @@
 use crate::app::MONOSPACE;
+use crate::app::screens::import::ImportedFiles;
 use crate::app::screens::{COLLAPSE_ICON, EXPAND_ICON};
 use crate::mega_client::NodeKind;
 use crate::{Download, MegaFile, app::styles};
@@ -8,7 +9,7 @@ use iced::{Element, Length, Theme};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) struct ChooseFiles {
-    files: Vec<MegaFile>,
+    files: Vec<ImportedFiles>,
     file_filter: HashMap<String, bool>,
     expanded_files: HashMap<String, bool>,
 }
@@ -27,13 +28,19 @@ pub(crate) enum Message {
 
 pub(crate) enum Action {
     None,
-    QueueDownloads(Vec<Download>),
+    QueueDownloads(Vec<QueuedDownload>),
     /// notify parent to clear file handles tracking
     ClearFiles,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct QueuedDownload {
+    pub(crate) download: Download,
+    pub(crate) source_url: String,
+}
+
 impl ChooseFiles {
-    pub(crate) fn new(files: Vec<MegaFile>) -> Self {
+    pub(crate) fn new(files: Vec<ImportedFiles>) -> Self {
         Self {
             files,
             file_filter: HashMap::new(),
@@ -41,7 +48,7 @@ impl ChooseFiles {
         }
     }
 
-    pub(crate) fn add_files(&mut self, files: Vec<MegaFile>) {
+    pub(crate) fn add_files(&mut self, files: Vec<ImportedFiles>) {
         self.files.extend(files);
     }
 
@@ -71,14 +78,22 @@ impl ChooseFiles {
             }
             Message::AddFiles => {
                 // flatten file structure into a list of downloads
-                let downloads: Vec<Download> = self
+                let downloads: Vec<QueuedDownload> = self
                     .files
                     .iter()
-                    .flat_map(|file| file.iter())
-                    .filter(|f| f.node.kind == NodeKind::File)
-                    .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
-                    .filter(|f| !active_handles.contains(&f.node.handle))
-                    .map(Download::new)
+                    .flat_map(|imported| {
+                        imported
+                            .files
+                            .iter()
+                            .flat_map(|file| file.iter().map(|file| (file, &imported.source_url)))
+                    })
+                    .filter(|(file, _)| file.node.kind == NodeKind::File)
+                    .filter(|(file, _)| *self.file_filter.get(&file.node.handle).unwrap_or(&true))
+                    .filter(|(file, _)| !active_handles.contains(&file.node.handle))
+                    .map(|(file, source_url)| QueuedDownload {
+                        download: Download::new(file),
+                        source_url: source_url.clone(),
+                    })
                     .collect();
 
                 Action::QueueDownloads(downloads)
@@ -93,15 +108,17 @@ impl ChooseFiles {
         let size: u64 = self
             .files
             .iter()
-            .flat_map(|file| file.iter())
+            .flat_map(|imported| imported.files.iter().flat_map(|file| file.iter()))
             .filter(|f| f.node.kind == NodeKind::File)
             .filter(|f| *self.file_filter.get(&f.node.handle).unwrap_or(&true))
             .map(|file| file.node.size)
             .sum();
         let size_gb = size as f64 / 1024f64.powi(3);
 
-        for file in &self.files {
-            column = column.push(self.recursive_files(file));
+        for imported in &self.files {
+            for file in &imported.files {
+                column = column.push(self.recursive_files(file));
+            }
         }
 
         container(

@@ -38,6 +38,7 @@ pub(crate) enum Message {
     RemoveProxy(usize),
     RebuildMega,
     CheckForUpdatesChanged(bool),
+    PersistDownloadSessionsChanged(bool),
     CheckForUpdates,
 }
 
@@ -150,6 +151,10 @@ impl Settings {
             }
             Message::CheckForUpdatesChanged(check_for_updates) => {
                 self.config.check_for_updates = check_for_updates;
+                Action::None
+            }
+            Message::PersistDownloadSessionsChanged(enabled) => {
+                self.config.persist_download_sessions = enabled;
                 Action::None
             }
             Message::ProxyModeChanged(proxy_mode) => {
@@ -291,6 +296,17 @@ impl Settings {
                 ))
                 .push(space::vertical().height(Length::Fixed(10_f32)))
                 .push(self.proxy_selector())
+                .push(space::vertical().height(Length::Fixed(8_f32)))
+                .push(
+                    Row::new()
+                        .height(Length::Fixed(30_f32))
+                        .push(space::horizontal().width(Length::Fixed(8_f32)))
+                        .push(
+                            checkbox(self.config.persist_download_sessions)
+                                .label("Restore downloads after closing")
+                                .on_toggle(Message::PersistDownloadSessionsChanged),
+                        ),
+                )
                 .push(space::vertical().height(Length::Fixed(8_f32)))
                 .push(
                     Row::new()
@@ -463,5 +479,23 @@ impl Settings {
             .push(space::horizontal().width(Length::Fixed(8_f32)))
             .push(column)
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Action, Message, Settings};
+    use crate::config::Config;
+
+    #[test]
+    fn download_session_restore_is_disabled_by_default_and_toggleable() {
+        let mut settings = Settings::new(Config::default());
+
+        assert!(!settings.config.persist_download_sessions);
+        assert!(matches!(
+            settings.update(Message::PersistDownloadSessionsChanged(true)),
+            Action::None
+        ));
+        assert!(settings.config.persist_download_sessions);
     }
 }

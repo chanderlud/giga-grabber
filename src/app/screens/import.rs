@@ -20,7 +20,7 @@ pub(crate) enum Message {
     /// load all URLs
     AddAllUrls,
     /// file loading result
-    GotFiles(Result<(Vec<MegaFile>, usize), usize>),
+    GotFiles(Result<(Vec<MegaFile>, String, usize), usize>),
     /// URL text input changed
     UrlInput((usize, String)),
     /// add new URL input field
@@ -32,8 +32,13 @@ pub(crate) enum Message {
 pub(crate) enum Action {
     None,
     Run(Task<Message>),
-    FilesLoaded(Vec<MegaFile>),
+    FilesLoaded(ImportedFiles),
     ShowError(String),
+}
+
+pub(crate) struct ImportedFiles {
+    pub(crate) files: Vec<MegaFile>,
+    pub(crate) source_url: String,
 }
 
 pub(crate) struct Import {
@@ -91,10 +96,15 @@ impl Import {
                             UrlStatus::Loading | UrlStatus::Loaded => Action::None,
                             _ => {
                                 input.status = UrlStatus::Loading; // set status to loading
+                                let mega = MegaClient::clone(mega);
                                 let url = input.value.clone();
+                                let source_url = url.clone();
 
                                 Action::Run(Task::perform(
-                                    get_files(mega.clone(), url, index),
+                                    async move {
+                                        let (files, index) = get_files(mega, url, index).await?;
+                                        Ok((files, source_url, index))
+                                    },
                                     Message::GotFiles,
                                 ))
                             }
@@ -116,10 +126,10 @@ impl Import {
                 Action::Run(Task::batch(commands))
             }
             Message::GotFiles(result) => match result {
-                Ok((files, index)) => {
+                Ok((files, source_url, index)) => {
                     if let Some(input) = self.url_input.get_mut(index) {
                         input.status = UrlStatus::Loaded;
-                        Action::FilesLoaded(files)
+                        Action::FilesLoaded(ImportedFiles { files, source_url })
                     } else {
                         Action::ShowError("An error occurred".to_string())
                     }
