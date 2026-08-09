@@ -57,10 +57,8 @@ impl Download {
         let download = Self::new(file);
         download.pause();
 
-        match metadata(download.final_path()).await {
-            Ok(_) => return Ok(None),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        if try_exists(download.final_path()).await? {
+            return Ok(None);
         }
 
         let completed = match metadata(download.partial_path()).await {
