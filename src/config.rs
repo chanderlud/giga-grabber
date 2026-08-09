@@ -67,6 +67,12 @@ pub(crate) struct Config {
     #[cfg(feature = "gui")]
     #[serde(default)]
     pub(crate) persist_download_sessions: bool,
+    #[cfg(feature = "gui")]
+    #[serde(default = "default_display_preference")]
+    pub(crate) show_progress_bars: bool,
+    #[cfg(feature = "gui")]
+    #[serde(default = "default_display_preference")]
+    pub(crate) show_download_sizes: bool,
     pub(crate) max_workers: usize,
     pub(crate) concurrency_budget: usize,
     pub(crate) max_retries: u32,
@@ -87,6 +93,10 @@ impl Default for Config {
             check_for_updates: default_check_for_updates(),
             #[cfg(feature = "gui")]
             persist_download_sessions: false,
+            #[cfg(feature = "gui")]
+            show_progress_bars: default_display_preference(),
+            #[cfg(feature = "gui")]
+            show_download_sizes: default_display_preference(),
             max_workers: 10,
             concurrency_budget: 10,
             max_retries: 3,
@@ -199,6 +209,11 @@ impl Config {
 
 #[cfg(feature = "gui")]
 fn default_check_for_updates() -> bool {
+    true
+}
+
+#[cfg(feature = "gui")]
+fn default_display_preference() -> bool {
     true
 }
 
@@ -341,4 +356,44 @@ fn save_default() -> Config {
         error!("Failed to save default config: {save_error}",);
     }
     config
+}
+
+#[cfg(all(test, feature = "gui"))]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn display_preferences_default_to_visible() {
+        let config = Config::default();
+
+        assert!(config.show_progress_bars);
+        assert!(config.show_download_sizes);
+    }
+
+    #[test]
+    fn legacy_config_missing_display_preferences_defaults_to_visible() {
+        let mut legacy_config = serde_json::to_value(Config::default()).unwrap();
+        let fields = legacy_config.as_object_mut().unwrap();
+        fields.remove("show_progress_bars");
+        fields.remove("show_download_sizes");
+
+        let config: Config = serde_json::from_value(legacy_config).unwrap();
+
+        assert!(config.show_progress_bars);
+        assert!(config.show_download_sizes);
+    }
+
+    #[test]
+    fn disabled_display_preferences_round_trip() {
+        let config = Config {
+            show_progress_bars: false,
+            show_download_sizes: false,
+            ..Config::default()
+        };
+
+        let config: Config = serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+
+        assert!(!config.show_progress_bars);
+        assert!(!config.show_download_sizes);
+    }
 }

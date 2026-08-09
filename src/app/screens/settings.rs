@@ -39,6 +39,8 @@ pub(crate) enum Message {
     RebuildMega,
     CheckForUpdatesChanged(bool),
     PersistDownloadSessionsChanged(bool),
+    ShowProgressBarsChanged(bool),
+    ShowDownloadSizesChanged(bool),
     CheckForUpdates,
 }
 
@@ -157,6 +159,14 @@ impl Settings {
                 self.config.persist_download_sessions = enabled;
                 Action::None
             }
+            Message::ShowProgressBarsChanged(enabled) => {
+                self.config.show_progress_bars = enabled;
+                Action::None
+            }
+            Message::ShowDownloadSizesChanged(enabled) => {
+                self.config.show_download_sizes = enabled;
+                Action::None
+            }
             Message::ProxyModeChanged(proxy_mode) => {
                 if proxy_mode == ProxyMode::Single {
                     self.config.proxies.truncate(1);
@@ -231,106 +241,122 @@ impl Settings {
             apply_button = apply_button.on_press(Message::RebuildMega);
         }
 
+        let network_settings = Column::new()
+            .spacing(8)
+            .push(text("Network").size(20))
+            .push(self.settings_slider(
+                0,
+                self.config.max_workers,
+                MIN_MAX_WORKERS as f64..=MAX_MAX_WORKERS as f64,
+                "Max Workers:",
+            ))
+            .push(self.settings_slider(
+                1,
+                self.config.concurrency_budget,
+                MIN_CONCURRENCY as f64..=MAX_CONCURRENCY as f64,
+                "Concurrency Budget:",
+            ))
+            .push(self.settings_slider(
+                2,
+                self.config.timeout.as_millis() as usize,
+                100_f64..=60000_f64,
+                "Timeout:",
+            ))
+            .push(self.settings_slider(
+                3,
+                self.config.max_retries as usize,
+                1_f64..=10_f64,
+                "Max retries:",
+            ))
+            .push(self.settings_slider(
+                4,
+                self.config.min_retry_delay.as_millis() as usize,
+                100_f64..=self.config.max_retry_delay.as_millis() as f64,
+                "Min Retry delay:",
+            ))
+            .push(self.settings_slider(
+                5,
+                self.config.max_retry_delay.as_millis() as usize,
+                self.config.min_retry_delay.as_millis() as f64..=60000_f64,
+                "Max Retry delay:",
+            ))
+            .push(self.settings_picklist(
+                "Proxy Mode",
+                &ProxyMode::ALL[..],
+                Some(self.config.proxy_mode),
+                Message::ProxyModeChanged,
+            ))
+            .push(self.proxy_selector());
+
+        let general_settings = Column::new()
+            .spacing(8)
+            .push(text("General").size(20))
+            .push(
+                checkbox(self.config.persist_download_sessions)
+                    .label("Restore downloads after closing")
+                    .on_toggle(Message::PersistDownloadSessionsChanged),
+            )
+            .push(
+                Row::new()
+                    .height(Length::Fixed(30_f32))
+                    .push(
+                        checkbox(self.config.check_for_updates)
+                            .label("Automatically check for updates")
+                            .on_toggle(Message::CheckForUpdatesChanged),
+                    )
+                    .push(space::horizontal())
+                    .push(
+                        button("Check now")
+                            .width(Length::Fixed(120_f32))
+                            .style(styles::button::primary)
+                            .on_press(Message::CheckForUpdates),
+                    ),
+            );
+
+        let ui_customization = Column::new()
+            .spacing(8)
+            .push(text("UI Customization").size(20))
+            .push(
+                Row::new()
+                    .height(Length::Fixed(30_f32))
+                    .push(text("Theme").align_y(Vertical::Center).height(Length::Fill))
+                    .push(space::horizontal())
+                    .push(
+                        pick_list(
+                            self.theme_options.clone(),
+                            Some(self.config.theme.clone()),
+                            Message::ThemeChanged,
+                        )
+                        .width(Length::Fixed(170_f32))
+                        .style(styles::pick_list::default),
+                    ),
+            )
+            .push(
+                checkbox(self.config.show_progress_bars)
+                    .label("Show download progress bars")
+                    .on_toggle(Message::ShowProgressBarsChanged),
+            )
+            .push(
+                checkbox(self.config.show_download_sizes)
+                    .label("Show download sizes")
+                    .on_toggle(Message::ShowDownloadSizesChanged),
+            );
+
         container(
             Column::new()
                 .width(Length::Fixed(350_f32))
-                .push(self.settings_slider(
-                    0,
-                    self.config.max_workers,
-                    MIN_MAX_WORKERS as f64..=MAX_MAX_WORKERS as f64,
-                    "Max Workers:",
-                ))
-                .push(self.settings_slider(
-                    1,
-                    self.config.concurrency_budget,
-                    MIN_CONCURRENCY as f64..=MAX_CONCURRENCY as f64,
-                    "Concurrency Budget:",
-                ))
-                .push(self.settings_slider(
-                    2,
-                    self.config.timeout.as_millis() as usize,
-                    100_f64..=60000_f64,
-                    "Timeout:",
-                ))
-                .push(self.settings_slider(
-                    3,
-                    self.config.max_retries as usize,
-                    1_f64..=10_f64,
-                    "Max retries:",
-                ))
-                .push(self.settings_slider(
-                    4,
-                    self.config.min_retry_delay.as_millis() as usize,
-                    100_f64..=self.config.max_retry_delay.as_millis() as f64,
-                    "Min Retry delay:",
-                ))
-                .push(self.settings_slider(
-                    5,
-                    self.config.max_retry_delay.as_millis() as usize,
-                    self.config.min_retry_delay.as_millis() as f64..=60000_f64,
-                    "Max Retry delay:",
-                ))
-                .push(space::vertical().height(Length::Fixed(10_f32)))
+                .height(Length::Fill)
+                .spacing(10)
                 .push(
-                    Row::new()
-                        .height(Length::Fixed(30_f32))
-                        .push(space::horizontal().width(Length::Fixed(8_f32)))
-                        .push(text("Theme").align_y(Vertical::Center).height(Length::Fill))
-                        .push(space::horizontal())
-                        .push(
-                            pick_list(
-                                self.theme_options.clone(),
-                                Some(self.config.theme.clone()),
-                                Message::ThemeChanged,
-                            )
-                            .width(Length::Fixed(170_f32))
-                            .style(styles::pick_list::default),
-                        ),
+                    scrollable(
+                        Column::new()
+                            .spacing(16)
+                            .push(network_settings)
+                            .push(general_settings)
+                            .push(ui_customization),
+                    )
+                    .height(Length::Fill),
                 )
-                .push(space::vertical().height(Length::Fixed(10_f32)))
-                .push(self.settings_picklist(
-                    "Proxy Mode",
-                    &ProxyMode::ALL[..],
-                    Some(self.config.proxy_mode),
-                    Message::ProxyModeChanged,
-                ))
-                .push(space::vertical().height(Length::Fixed(10_f32)))
-                .push(self.proxy_selector())
-                .push(space::vertical().height(Length::Fixed(8_f32)))
-                .push(
-                    Row::new()
-                        .height(Length::Fixed(30_f32))
-                        .push(space::horizontal().width(Length::Fixed(8_f32)))
-                        .push(
-                            checkbox(self.config.persist_download_sessions)
-                                .label("Restore downloads after closing")
-                                .on_toggle(Message::PersistDownloadSessionsChanged),
-                        ),
-                )
-                .push(space::vertical().height(Length::Fixed(8_f32)))
-                .push(
-                    Row::new()
-                        .height(Length::Fixed(30_f32))
-                        .push(space::horizontal().width(Length::Fixed(8_f32)))
-                        .push(
-                            Column::new()
-                                .push(space::vertical().height(Length::Fill))
-                                .push(
-                                    checkbox(self.config.check_for_updates)
-                                        .label("Automatically check for updates")
-                                        .on_toggle(Message::CheckForUpdatesChanged),
-                                )
-                                .push(space::vertical().height(Length::Fill)),
-                        )
-                        .push(space::horizontal().width(Length::Fixed(5_f32)))
-                        .push(
-                            button("Check now")
-                                .width(Length::Fixed(120_f32))
-                                .style(styles::button::primary)
-                                .on_press(Message::CheckForUpdates),
-                        ),
-                )
-                .push(space::vertical().height(Length::Fill))
                 .push(
                     Row::new()
                         .push(space::horizontal().width(Length::Fixed(8_f32)))
@@ -497,5 +523,22 @@ mod tests {
             Action::None
         ));
         assert!(settings.config.persist_download_sessions);
+    }
+
+    #[test]
+    fn display_preferences_toggle_without_rebuild() {
+        let mut settings = Settings::new(Config::default());
+
+        assert!(matches!(
+            settings.update(Message::ShowProgressBarsChanged(false)),
+            Action::None
+        ));
+        assert!(matches!(
+            settings.update(Message::ShowDownloadSizesChanged(false)),
+            Action::None
+        ));
+        assert!(!settings.config.show_progress_bars);
+        assert!(!settings.config.show_download_sizes);
+        assert!(!settings.rebuild_available);
     }
 }
