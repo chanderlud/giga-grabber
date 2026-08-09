@@ -57,6 +57,12 @@ struct SessionFile {
     records: Vec<DownloadSessionRecord>,
 }
 
+#[derive(Serialize)]
+struct SessionFileRef<'a> {
+    version: u32,
+    records: &'a [DownloadSessionRecord],
+}
+
 pub(crate) fn load() -> Result<Vec<DownloadSessionRecord>> {
     load_from(Path::new(SESSION_PATH))
 }
@@ -109,9 +115,9 @@ fn extract_version(path: &Path) -> Option<u32> {
 }
 
 fn save_to(path: &Path, records: &[DownloadSessionRecord]) -> Result<()> {
-    let contents = serde_json::to_vec_pretty(&SessionFile {
+    let contents = serde_json::to_vec_pretty(&SessionFileRef {
         version: FORMAT_VERSION,
-        records: records.to_vec(),
+        records,
     })?;
     let temporary_path = temporary_path(path);
     let result = (|| {
@@ -166,7 +172,7 @@ fn replace_file(temporary_path: &Path, path: &Path) -> io::Result<()> {
         ) -> i32;
     }
 
-    let target_exists = path_exists(path)?;
+    let target_exists = path.try_exists()?;
     let temporary_path: Vec<u16> = temporary_path
         .as_os_str()
         .encode_wide()
@@ -198,15 +204,6 @@ fn replace_file(temporary_path: &Path, path: &Path) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
-    }
-}
-
-#[cfg(windows)]
-fn path_exists(path: &Path) -> io::Result<bool> {
-    match fs::metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
     }
 }
 
