@@ -9,6 +9,7 @@
 ## Development Rules
 
 - Run `cargo fmt` and `cargo clippy` after editing Rust code, resolve lints where reasonable.
+- Prefer `cargo nextest run` for Rust tests when `cargo-nextest` is available; otherwise use `cargo test`.
 
 ## Test Quality Policy
 
