@@ -502,7 +502,14 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         // build content
         let content = match self.route {
-            Route::Home => container(self.home.view().map(Message::Home)),
+            Route::Home => container(
+                self.home
+                    .view(components::download_item::DisplayPreferences {
+                        show_progress_bars: self.settings.config.show_progress_bars,
+                        show_download_sizes: self.settings.config.show_download_sizes,
+                    })
+                    .map(Message::Home),
+            ),
             Route::Import => container(self.import.view().map(Message::Import)),
             Route::ChooseFiles => {
                 if let Some(choose_files) = &self.choose_files {

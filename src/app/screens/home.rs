@@ -114,17 +114,22 @@ impl Home {
         }
     }
 
-    pub(crate) fn view(&self) -> Element<'_, Message> {
+    pub(crate) fn view(
+        &self,
+        display_preferences: download_item::DisplayPreferences,
+    ) -> Element<'_, Message> {
         let mut download_list = Column::new();
 
         for (index, (_id, download)) in self.active_downloads.iter().enumerate() {
-            download_list = download_list.push(download_item::download_item(download, index).map(
-                |msg| match msg {
-                    download_item::Message::Pause(id) => Message::PauseDownload(id),
-                    download_item::Message::Resume(id) => Message::ResumeDownload(id),
-                    download_item::Message::Cancel(id) => Message::CancelDownload(id),
-                },
-            ));
+            download_list = download_list.push(
+                download_item::download_item(download, index, display_preferences).map(|msg| {
+                    match msg {
+                        download_item::Message::Pause(id) => Message::PauseDownload(id),
+                        download_item::Message::Resume(id) => Message::ResumeDownload(id),
+                        download_item::Message::Cancel(id) => Message::CancelDownload(id),
+                    }
+                }),
+            );
         }
 
         if self.active_downloads.is_empty() {
