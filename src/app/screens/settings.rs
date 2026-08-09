@@ -9,7 +9,7 @@ use iced::widget::{
     Column, Row, button, checkbox, container, pick_list, scrollable, slider, space, svg, text,
     text_input,
 };
-use iced::{Element, Length, Theme};
+use iced::{Alignment, Element, Length, Theme};
 use native_dialog::FileDialogBuilder;
 use num_traits::cast::ToPrimitive;
 use std::borrow::Cow;
@@ -304,12 +304,6 @@ impl Settings {
             .push(
                 Row::new()
                     .height(Length::Fixed(30_f32))
-                    .push(space::horizontal().width(Length::Fixed(8_f32)))
-                    .push(
-                        text("Check for updates")
-                            .align_y(Vertical::Center)
-                            .height(Length::Fill),
-                    )
                     .push(space::horizontal())
                     .push(
                         button("Check for updates")
@@ -350,7 +344,7 @@ impl Settings {
 
         container(
             Column::new()
-                .width(Length::Fixed(350_f32))
+                .width(Length::Fill)
                 .height(Length::Fill)
                 .spacing(10)
                 .push(
@@ -449,6 +443,7 @@ impl Settings {
     ) -> Element<'a, Message> {
         Row::new()
             .height(Length::Fixed(30_f32))
+            .align_y(Alignment::Center)
             .push(space::horizontal().width(Length::Fixed(8_f32)))
             .push(text(label).align_y(Vertical::Center).height(Length::Fill))
             .push(space::horizontal())
