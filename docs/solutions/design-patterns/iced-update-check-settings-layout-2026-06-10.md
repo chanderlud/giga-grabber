@@ -35,7 +35,7 @@ The final branch separates the work into four concerns:
 - `src/update_check.rs` owns GitHub release fetching and version comparison.
 - `src/config.rs` persists the user's automatic-check preference without breaking existing `config.json` files.
 - `src/app.rs` schedules async checks, decides which results are silent or visible, and owns modal state.
-- `src/app/screens/settings.rs` and `src/app/components/error_modal.rs` present the settings controls and update modal.
+- `src/app/screens/settings.rs` and `src/app/components/modal.rs` present the settings controls and update modal.
 
 The branch also surfaced a few practical pitfalls: Iced 0.14 uses `checkbox(state).label(...).on_toggle(...)`, not a label-first checkbox helper; update-available should be modeled as structured app state rather than folded into generic error text; and a raw release URL in modal copy is less useful than a clear `Open release` button.
 
@@ -96,7 +96,7 @@ match result {
 }
 ```
 
-For settings layout, place the update preference and manual action together as one final settings row above the generic Save/Reset controls. Keep the button fixed-width so the label does not wrap or jitter.
+For settings layout, place the update preference and manual action together in the General section above the generic Save/Reset controls, but give each its own aligned row. Keep the button fixed-width so its label does not wrap or jitter.
 
 ```rust
 Row::new()
@@ -109,9 +109,24 @@ Row::new()
     )
     .push(space::horizontal())
     .push(
-        button("Check now")
-            .width(Length::Fixed(120_f32))
+        button("Check for updates")
+            .width(Length::Fixed(170_f32))
             .style(styles::button::primary)
+            .on_press(Message::CheckForUpdates),
+    )
+```
+
+When checkbox controls use a label-left/control-right layout, keep the checkbox and manual action in separate rows:
+
+```rust
+settings_checkbox("Automatically check for updates", self.config.check_for_updates)
+
+Row::new()
+    .height(Length::Fixed(30_f32))
+    .push(space::horizontal())
+    .push(
+        button("Check for updates")
+            .width(Length::Fixed(170_f32))
             .on_press(Message::CheckForUpdates),
     )
 ```
@@ -214,7 +229,7 @@ impl UpdateCheckError {
 
 ### Put update controls where users expect app-level preferences
 
-The update checkbox and manual action belong together as the last settings row, not between existing transfer/proxy tuning controls and not split between the form body and the bottom Save/Reset row.
+The update checkbox and manual action belong together in the General section, not between existing transfer/proxy tuning controls and not split between the form body and the bottom Save/Reset row. Use separate aligned rows when checkbox controls are right-aligned.
 
 ```rust
 .push(self.proxy_selector())
@@ -241,7 +256,7 @@ button(" Open release ")
 - `src/config.rs` - persisted `check_for_updates` defaulting.
 - `src/app.rs` and `src/app/helpers.rs` - Iced task routing, app-owned modal state, and message definitions.
 - `src/app/screens/settings.rs` - final-row settings placement and fixed-width action button.
-- `src/app/components/error_modal.rs` - existing generic modal plus update-specific modal.
+- `src/app/components/modal.rs` - existing generic modal plus update-specific modal.
 - `docs/solutions/best-practices/session-centered-transfer-core-2026-04-18.md` - adjacent pattern for keeping surfaces thin over shared logic; overlap is low, but the same principle applies here.
 
 External references that informed the captured pattern:
