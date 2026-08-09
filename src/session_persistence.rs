@@ -75,7 +75,7 @@ pub(crate) fn remove() -> Result<()> {
     remove_from(Path::new(SESSION_PATH))
 }
 
-fn load_from(path: &Path) -> Result<Vec<DownloadSessionRecord>> {
+pub(crate) fn load_from(path: &Path) -> Result<Vec<DownloadSessionRecord>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -114,17 +114,22 @@ fn extract_version(path: &Path) -> Option<u32> {
         .filter(|version| *version != FORMAT_VERSION)
 }
 
-fn save_to(path: &Path, records: &[DownloadSessionRecord]) -> Result<()> {
+pub(crate) fn save_to(path: &Path, records: &[DownloadSessionRecord]) -> Result<()> {
     let contents = serde_json::to_vec_pretty(&SessionFileRef {
         version: FORMAT_VERSION,
         records,
     })?;
     let temporary_path = temporary_path(path);
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary_path)?;
         file.write_all(&contents)?;
         #[cfg(unix)]
         if let Ok(metadata) = fs::metadata(path) {
@@ -270,6 +275,26 @@ mod tests {
         assert!(json.contains("\"version\": 1"));
         assert!(!json.contains("progress"));
         assert!(!json.contains("crypto"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn newly_created_session_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join(SESSION_PATH);
+
+        save_to(&path, &[record()]).expect("save session");
+
+        assert_eq!(
+            std::fs::metadata(path)
+                .expect("session metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 
     #[test]

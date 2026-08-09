@@ -14,6 +14,7 @@ use iced::time::every;
 use iced::widget::{Row, container, text};
 use iced::{Element, Font, Length, Subscription, Task, Theme, window};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
@@ -340,7 +341,18 @@ impl App {
                     return self.close_window();
                 }
 
-                let records: Vec<_> = self.download_records.values().cloned().collect();
+                let records = match snapshot_records(
+                    Path::new("download-session.json"),
+                    &self.download_records,
+                ) {
+                    Ok(records) => records,
+                    Err(error) => {
+                        self.close_pending = false;
+                        self.error_modal =
+                            Some(format!("Failed to load download session: {error}"));
+                        return Task::none();
+                    }
+                };
                 Task::perform(
                     async move {
                         if records.is_empty() {
@@ -644,6 +656,27 @@ fn retain_download_records(
     }
 }
 
+fn merge_download_records(
+    records: &mut HashMap<String, DownloadSessionRecord>,
+    additional: impl IntoIterator<Item = DownloadSessionRecord>,
+) {
+    for record in additional {
+        records.entry(record.node_handle.clone()).or_insert(record);
+    }
+}
+
+fn snapshot_records(
+    path: &Path,
+    download_records: &HashMap<String, DownloadSessionRecord>,
+) -> Result<Vec<DownloadSessionRecord>, session_persistence::Error> {
+    let mut records = session_persistence::load_from(path)?
+        .into_iter()
+        .map(|record| (record.node_handle.clone(), record))
+        .collect();
+    merge_download_records(&mut records, download_records.values().cloned());
+    Ok(records.into_values().collect())
+}
+
 fn expose_accepted_downloads(
     home: &mut Home,
     downloads: &[QueuedDownload],
@@ -766,10 +799,10 @@ mod tests {
     use crate::app::screens::choose_files::QueuedDownload;
     use crate::app::screens::home::Home;
     use crate::mega_client::Node;
-    use crate::session_persistence::DownloadSessionRecord;
+    use crate::session_persistence::{self, DownloadSessionRecord};
     use crate::{Download, MegaFile};
     use std::collections::{HashMap, HashSet};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
 
     #[test]
@@ -835,6 +868,45 @@ mod tests {
         assert_eq!(
             records["retry-handle"].source_url,
             "https://mega.nz/folder/retry#key"
+        );
+    }
+
+    #[test]
+    fn close_snapshot_selects_persisted_and_queued_records() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("download-session.json");
+        session_persistence::save_to(
+            &path,
+            &[DownloadSessionRecord {
+                source_url: "https://mega.nz/file/restore#key".to_string(),
+                node_handle: "restore-handle".to_string(),
+                destination_dir: PathBuf::from("downloads/restore"),
+                expected_size: 8_192,
+            }],
+        )
+        .expect("save persisted restore record");
+        let records = HashMap::from([(
+            "queued-handle".to_string(),
+            DownloadSessionRecord {
+                source_url: "https://mega.nz/file/queued#key".to_string(),
+                node_handle: "queued-handle".to_string(),
+                destination_dir: PathBuf::from("downloads/queued"),
+                expected_size: 4_096,
+            },
+        )]);
+
+        let selected = super::snapshot_records(Path::new(&path), &records)
+            .expect("select close snapshot records");
+        let selected: HashMap<_, _> = selected
+            .into_iter()
+            .map(|record| (record.node_handle.clone(), record))
+            .collect();
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected["restore-handle"].expected_size, 8_192);
+        assert_eq!(
+            selected["queued-handle"].source_url,
+            "https://mega.nz/file/queued#key"
         );
     }
 
