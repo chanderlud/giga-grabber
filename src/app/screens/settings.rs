@@ -291,23 +291,29 @@ impl Settings {
         let general_settings = Column::new()
             .spacing(8)
             .push(text("General").size(20))
-            .push(
-                checkbox(self.config.persist_download_sessions)
-                    .label("Restore downloads after closing")
-                    .on_toggle(Message::PersistDownloadSessionsChanged),
-            )
+            .push(self.settings_checkbox(
+                "Restore downloads after closing",
+                self.config.persist_download_sessions,
+                Message::PersistDownloadSessionsChanged,
+            ))
+            .push(self.settings_checkbox(
+                "Automatically check for updates",
+                self.config.check_for_updates,
+                Message::CheckForUpdatesChanged,
+            ))
             .push(
                 Row::new()
                     .height(Length::Fixed(30_f32))
+                    .push(space::horizontal().width(Length::Fixed(8_f32)))
                     .push(
-                        checkbox(self.config.check_for_updates)
-                            .label("Automatically check for updates")
-                            .on_toggle(Message::CheckForUpdatesChanged),
+                        text("Check for updates")
+                            .align_y(Vertical::Center)
+                            .height(Length::Fill),
                     )
                     .push(space::horizontal())
                     .push(
-                        button("Check now")
-                            .width(Length::Fixed(120_f32))
+                        button("Check for updates")
+                            .width(Length::Fixed(170_f32))
                             .style(styles::button::primary)
                             .on_press(Message::CheckForUpdates),
                     ),
@@ -331,16 +337,16 @@ impl Settings {
                         .style(styles::pick_list::default),
                     ),
             )
-            .push(
-                checkbox(self.config.show_progress_bars)
-                    .label("Show download progress bars")
-                    .on_toggle(Message::ShowProgressBarsChanged),
-            )
-            .push(
-                checkbox(self.config.show_download_sizes)
-                    .label("Show download sizes")
-                    .on_toggle(Message::ShowDownloadSizesChanged),
-            );
+            .push(self.settings_checkbox(
+                "Show download progress bars",
+                self.config.show_progress_bars,
+                Message::ShowProgressBarsChanged,
+            ))
+            .push(self.settings_checkbox(
+                "Show download sizes",
+                self.config.show_download_sizes,
+                Message::ShowDownloadSizesChanged,
+            ));
 
         container(
             Column::new()
@@ -350,11 +356,13 @@ impl Settings {
                 .push(
                     scrollable(
                         Column::new()
+                            .width(Length::Fill)
                             .spacing(16)
                             .push(network_settings)
                             .push(general_settings)
                             .push(ui_customization),
                     )
+                    .width(Length::Fill)
                     .height(Length::Fill),
                 )
                 .push(
@@ -430,6 +438,21 @@ impl Settings {
                     .width(Length::Fixed(170_f32))
                     .style(styles::pick_list::default),
             )
+            .into()
+    }
+
+    fn settings_checkbox<'a>(
+        &self,
+        label: &'a str,
+        is_checked: bool,
+        on_toggle: fn(bool) -> Message,
+    ) -> Element<'a, Message> {
+        Row::new()
+            .height(Length::Fixed(30_f32))
+            .push(space::horizontal().width(Length::Fixed(8_f32)))
+            .push(text(label).align_y(Vertical::Center).height(Length::Fill))
+            .push(space::horizontal())
+            .push(checkbox(is_checked).on_toggle(on_toggle))
             .into()
     }
 
@@ -540,5 +563,15 @@ mod tests {
         assert!(!settings.config.show_progress_bars);
         assert!(!settings.config.show_download_sizes);
         assert!(!settings.rebuild_available);
+    }
+
+    #[test]
+    fn check_for_updates_returns_check_for_updates_action() {
+        let mut settings = Settings::new(Config::default());
+
+        assert!(matches!(
+            settings.update(Message::CheckForUpdates),
+            Action::CheckForUpdates
+        ));
     }
 }
