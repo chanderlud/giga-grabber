@@ -747,6 +747,7 @@ pub(crate) fn build_app() -> iced::Application<impl iced::Program<Message = Mess
         .title(App::title)
         .subscription(App::subscription)
         .theme(App::theme)
+        .exit_on_close_request(false)
         .window_size((700.0, 550.0))
         .font(CABIN_REGULAR)
         .font(INCONSOLATA_MEDIUM)
