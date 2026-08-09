@@ -18,6 +18,8 @@ use std::ops::RangeInclusive;
 use std::time::Duration;
 use url::Url;
 
+const SETTINGS_CONTENT_MAX_WIDTH: f32 = 350.0;
+
 #[derive(Clone)]
 pub(crate) struct Settings {
     pub(crate) config: Config,
@@ -319,6 +321,7 @@ impl Settings {
             .push(
                 Row::new()
                     .height(Length::Fixed(30_f32))
+                    .push(space::horizontal().width(Length::Fixed(8_f32)))
                     .push(text("Theme").align_y(Vertical::Center).height(Length::Fill))
                     .push(space::horizontal())
                     .push(
@@ -349,12 +352,17 @@ impl Settings {
                 .spacing(10)
                 .push(
                     scrollable(
-                        Column::new()
+                        Column::new().width(Length::Fill).spacing(16).push(
+                            container(
+                                Column::new()
+                                    .width(Length::Fill)
+                                    .push(network_settings)
+                                    .push(general_settings)
+                                    .push(ui_customization),
+                            )
                             .width(Length::Fill)
-                            .spacing(16)
-                            .push(network_settings)
-                            .push(general_settings)
-                            .push(ui_customization),
+                            .max_width(SETTINGS_CONTENT_MAX_WIDTH),
+                        ),
                     )
                     .width(Length::Fill)
                     .height(Length::Fill),
