@@ -226,11 +226,9 @@ impl App {
                             if let Some(session) = &mut self.session {
                                 session.set_runner_sender(runner_sender);
                                 let existing_handles = session.handles();
-                                let downloads_to_queue: Vec<Download> = downloads
-                                    .iter()
-                                    .map(|queued| queued.download.clone())
-                                    .collect();
-                                if let Err(error) = session.add_downloads(downloads_to_queue) {
+                                if let Err(error) = session.add_downloads(
+                                    downloads.iter().map(|queued| queued.download.clone()),
+                                ) {
                                     self.error_modal =
                                         Some(format!("Failed to queue downloads: {error}"));
                                     return Task::none();
@@ -298,12 +296,12 @@ impl App {
                     let session = self.session.as_mut().expect("session created when absent");
                     session.set_runner_sender(runner_sender);
                     let existing_handles = session.handles();
-                    let downloads_to_queue: Vec<Download> = restored
-                        .downloads
-                        .iter()
-                        .map(|queued| queued.download.clone())
-                        .collect();
-                    match session.add_downloads(downloads_to_queue) {
+                    match session.add_downloads(
+                        restored
+                            .downloads
+                            .iter()
+                            .map(|queued| queued.download.clone()),
+                    ) {
                         Ok(_) => {
                             let accepted_handles = session.handles();
                             self.record_accepted_downloads(
@@ -593,7 +591,7 @@ impl App {
         accepted_handles: &HashSet<String>,
     ) {
         for (handle, record) in records_by_handle(downloads) {
-            if !existing_handles.contains(&handle) && accepted_handles.contains(&handle) {
+            if is_newly_accepted_handle(&handle, existing_handles, accepted_handles) {
                 self.download_records.insert(handle, record);
             }
         }
@@ -654,10 +652,18 @@ fn expose_accepted_downloads(
 ) {
     for queued in downloads {
         let handle = &queued.download.node.handle;
-        if !existing_handles.contains(handle) && accepted_handles.contains(handle) {
+        if is_newly_accepted_handle(handle, existing_handles, accepted_handles) {
             home.add_active_download(queued.download.clone());
         }
     }
+}
+
+fn is_newly_accepted_handle(
+    handle: &str,
+    existing_handles: &HashSet<String>,
+    accepted_handles: &HashSet<String>,
+) -> bool {
+    !existing_handles.contains(handle) && accepted_handles.contains(handle)
 }
 
 async fn restore_downloads(mega: MegaClient) -> Result<RestoredDownloads, String> {
