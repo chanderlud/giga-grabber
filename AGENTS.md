@@ -4,6 +4,7 @@
 - `src/app/` contains the Iced GUI code.
 - `src/cli.rs` contains the CLI code.
 - `docs/solutions/` stores documented solutions to past problems and practices, organized by category with YAML frontmatter (`module`, `tags`, `problem_type`); relevant when implementing or debugging in documented areas.
+- `docs/CONCEPTS.md` stores shared project vocabulary and is the only canonical location for concepts documentation.
 
 ## Development Rules
 

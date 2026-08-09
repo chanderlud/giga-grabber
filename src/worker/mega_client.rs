@@ -20,7 +20,6 @@ use std::io::SeekFrom;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -152,7 +151,7 @@ impl MegaClient {
         let (download_url, remote_size) = self.get_download_url(&download.node).await?;
 
         // figure out resume offset & open file accordingly
-        let (mut file, resume_from) = if dest_path.exists() {
+        let (mut file, resume_from, durable_len) = if dest_path.exists() {
             let meta = fs::metadata(dest_path)
                 .await
                 .with_context(|| format!("stat {:?}", dest_path))?;
@@ -165,9 +164,11 @@ impl MegaClient {
                         .await
                         .with_context(|| format!("creating {:?}", dest_path))?,
                     0,
+                    0,
                 )
             } else if local_len >= remote_size {
                 // already complete or bigger than the remote size; assume done
+                download.set_downloaded(remote_size);
                 return Ok(true);
             } else {
                 // resume with some rewind.
@@ -184,7 +185,7 @@ impl MegaClient {
                     .await
                     .with_context(|| format!("seeking {:?}", dest_path))?;
 
-                (f, resume_from)
+                (f, resume_from, local_len)
             }
         } else {
             (
@@ -192,8 +193,10 @@ impl MegaClient {
                     .await
                     .with_context(|| format!("creating {:?}", dest_path))?,
                 0,
+                0,
             )
         };
+        download.set_downloaded(durable_len);
 
         // fetch the download response, handling pausing
         let mut req = self.http.get(&download_url);
@@ -229,6 +232,7 @@ impl MegaClient {
         }
         let mut ctr = Ctr128BE::<Aes128>::new((&download.node.aes_key).into(), (&iv_block).into());
         ctr.seek(resume_from);
+        let mut written_through = resume_from;
 
         loop {
             select! {
@@ -243,7 +247,8 @@ impl MegaClient {
                         let mut buf = chunk?.to_vec();
                         ctr.apply_keystream(&mut buf);
                         file.write_all(&buf).await?;
-                        download.downloaded.fetch_add(buf.len(), Relaxed);
+                        written_through = written_through.saturating_add(buf.len() as u64);
+                        download.set_downloaded(durable_len.max(written_through));
                     } else {
                         break;
                     }

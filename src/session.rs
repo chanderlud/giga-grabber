@@ -239,12 +239,13 @@ impl WorkerState {
 mod tests {
     use super::{SessionEvent, TransferSession};
     use crate::config::Config;
-    use crate::worker::RunnerMessage;
     use crate::worker::fake::{DriverAction, FakeDriver};
     use crate::worker::tests::{
         make_download, next_message, wait_for_driver_calls, wait_for_paused,
     };
+    use crate::worker::{Download, RunnerMessage};
     use std::collections::VecDeque;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::sync::mpsc::channel;
@@ -431,6 +432,68 @@ mod tests {
         .await
         .expect("session drain timeout");
 
+        assert!(!session.has_live_transfers());
+        session.finish().await;
+    }
+
+    #[tokio::test]
+    async fn test_pausing_before_queueing_keeps_restored_download_paused() {
+        let temp = TempDir::new().expect("temp dir");
+        let node = crate::mega_client::Node::test_file(
+            "handle-restored-video.mkv",
+            "restored-video.mkv",
+            2_097_152,
+        );
+        let file = crate::MegaFile::new(node, temp.path().to_path_buf());
+        tokio::fs::write(
+            temp.path().join("restored-video.mkv.partial"),
+            vec![0_u8; 524_288],
+        )
+        .await
+        .expect("write durable partial");
+        let download = Download::restore(&file)
+            .await
+            .expect("inspect restored download")
+            .expect("final file must not exist");
+        let driver = make_driver(vec![DriverAction::Complete]);
+        let (runner_sender, mut runner_receiver) = channel(64);
+        let mut session = TransferSession::new(driver.clone(), Config::default());
+        session.set_runner_sender(runner_sender);
+
+        assert_eq!(download.downloaded.load(Ordering::Relaxed), 524_288);
+        #[cfg(feature = "gui")]
+        assert_eq!(download.progress(), 0.25);
+
+        session
+            .add_downloads(vec![download.clone()])
+            .expect("queue paused restored download");
+
+        wait_for_paused(&download).await;
+        sleep(Duration::from_millis(150)).await;
+        assert!(download.is_paused());
+        assert!(session.has_live_transfers());
+        assert_eq!(session.active_count(), 0);
+        assert_eq!(session.pending_count(), 1);
+        assert_eq!(driver.call_count(), 0);
+        assert!(
+            runner_receiver.try_recv().is_err(),
+            "paused restored download became active before resume"
+        );
+
+        download.resume();
+
+        let events = session.handle_runner_message(next_message(&mut runner_receiver).await);
+        assert!(matches!(
+            events.as_slice(),
+            [SessionEvent::TransferActive(_)]
+        ));
+        let events = session.handle_runner_message(next_message(&mut runner_receiver).await);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Drained))
+        );
+        assert_eq!(driver.call_count(), 1);
         assert!(!session.has_live_transfers());
         session.finish().await;
     }

@@ -468,6 +468,10 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
         fixture_state.saw_non_zero_range.load(Ordering::SeqCst),
         "expected resumed GET request with non-zero Range offset"
     );
+    assert_eq!(
+        download.downloaded.load(Ordering::Relaxed),
+        expected_plain.len()
+    );
 
     cancel.cancel();
     for worker in workers {
@@ -479,6 +483,37 @@ async fn test_real_mega_client_pause_during_send_and_stream_then_resume_and_comp
         .await
         .expect("fixture task join timeout")
         .expect("fixture task join failure");
+}
+
+#[tokio::test]
+async fn test_restore_uses_bounded_partial_length_and_ignores_final_file() {
+    let temp = TempDir::new().expect("temp dir");
+    let node = Node::test_file("restore-handle", "archive.bin", 1_000);
+    let file = MegaFile::new(node, temp.path().to_path_buf());
+    let partial_path = temp.path().join("archive.bin.partial");
+    tokio::fs::write(&partial_path, vec![0_u8; 1_200])
+        .await
+        .expect("write oversized partial");
+
+    let restored = Download::restore(&file)
+        .await
+        .expect("inspect partial")
+        .expect("final file must not exist");
+
+    assert!(restored.is_paused());
+    assert_eq!(restored.downloaded.load(Ordering::Relaxed), 1_000);
+    #[cfg(feature = "gui")]
+    assert_eq!(restored.progress(), 1.0);
+
+    tokio::fs::write(temp.path().join("archive.bin"), b"complete")
+        .await
+        .expect("write final file");
+    assert!(
+        Download::restore(&file)
+            .await
+            .expect("inspect final file")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -744,6 +779,56 @@ async fn test_pause_and_resume() {
         next_message(&mut message_receiver).await,
         RunnerMessage::Inactive { .. }
     ));
+
+    cancel.cancel();
+    for worker in workers {
+        worker.await.expect("worker join").expect("worker result");
+    }
+}
+
+#[tokio::test]
+async fn test_download_paused_before_enqueue_waits_for_explicit_resume() {
+    let temp = TempDir::new().expect("temp dir");
+    let download = make_download("restored-paused.bin", 1024, temp.path().to_path_buf());
+    download.pause();
+    let driver = make_driver(vec![DriverAction::Complete]);
+    let (download_sender, download_receiver) = kanal::unbounded_async();
+    let (message_sender, mut message_receiver) = channel(32);
+    let cancel = CancellationToken::new();
+    let workers = spawn_workers(
+        driver.clone(),
+        Arc::new(Config::default()),
+        download_receiver,
+        download_sender.clone(),
+        (message_sender, 0),
+        cancel.clone(),
+        1,
+    );
+
+    download_sender
+        .send(download.clone())
+        .await
+        .expect("enqueue paused restored download");
+
+    wait_for_paused(&download).await;
+    sleep(Duration::from_millis(150)).await;
+    assert_eq!(driver.call_count(), 0, "paused download invoked driver");
+    assert!(
+        message_receiver.try_recv().is_err(),
+        "paused download became active before resume"
+    );
+
+    download.resume();
+
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Active { .. }
+    ));
+    assert!(matches!(
+        next_message(&mut message_receiver).await,
+        RunnerMessage::Inactive { .. }
+    ));
+    assert_eq!(driver.call_count(), 1);
 
     cancel.cancel();
     for worker in workers {
