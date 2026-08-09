@@ -10,7 +10,6 @@ use std::sync::atomic::Ordering::Relaxed;
 pub(crate) struct Home {
     active_downloads: HashMap<String, Download>,
     errors: Vec<String>,
-    all_paused: bool,
     bandwidth_counter: usize,
 }
 
@@ -34,7 +33,6 @@ impl Home {
         Self {
             active_downloads: HashMap::new(),
             errors: Vec::new(),
-            all_paused: false,
             bandwidth_counter: 0,
         }
     }
@@ -82,7 +80,6 @@ impl Home {
                 Action::None
             }
             Message::PauseDownloads => {
-                self.all_paused = true;
                 for download in self.active_downloads.values() {
                     download.pause();
                 }
@@ -95,19 +92,25 @@ impl Home {
                 Action::None
             }
             Message::ResumeDownloads => {
-                self.all_paused = false;
                 for download in self.active_downloads.values() {
                     download.resume();
                 }
                 Action::None
             }
             Message::ResumeDownload(id) => {
-                self.all_paused = false; // can't be all paused if resuming one
                 if let Some(download) = self.active_downloads.get(&id) {
                     download.resume();
                 }
                 Action::None
             }
+        }
+    }
+
+    fn bulk_control_message(&self) -> Message {
+        if self.active_downloads.values().all(Download::is_paused) {
+            Message::ResumeDownloads
+        } else {
+            Message::PauseDownloads
         }
     }
 
@@ -143,15 +146,17 @@ impl Home {
                     .spacing(10)
                     .padding(8)
                     .height(Length::Fixed(45_f32))
-                    .push(if self.all_paused {
-                        button(" Resume All ")
-                            .on_press(Message::ResumeDownloads)
-                            .style(styles::button::primary)
-                    } else {
-                        button(" Pause All ")
-                            .on_press(Message::PauseDownloads)
-                            .style(styles::button::primary)
-                    })
+                    .push(
+                        if matches!(self.bulk_control_message(), Message::ResumeDownloads) {
+                            button(" Resume All ")
+                                .on_press(Message::ResumeDownloads)
+                                .style(styles::button::primary)
+                        } else {
+                            button(" Pause All ")
+                                .on_press(Message::PauseDownloads)
+                                .style(styles::button::primary)
+                        },
+                    )
                     .push(
                         button(" Cancel All ")
                             .on_press(Message::CancelDownloads)
@@ -222,3 +227,6 @@ impl Home {
         column.into()
     }
 }
+
+#[cfg(test)]
+mod tests;
