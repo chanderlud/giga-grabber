@@ -42,11 +42,12 @@ pub(crate) enum SessionEvent {
     TransferActive(Download),
     TransferTerminal(String),
     Error(String),
+    OutOfBandwidth(String),
     Drained,
 }
 ```
 
-`add_downloads()` makes append behavior idempotent per handle and starts workers only when needed. `handle_runner_message()` is the single place where worker activity becomes `TransferActive`, `TransferTerminal`, `Error`, or `Drained`.
+`add_downloads()` makes append behavior idempotent per handle and starts workers only when needed. `handle_runner_message()` is the single place where worker activity becomes `TransferActive`, `TransferTerminal`, `Error`, `OutOfBandwidth`, or `Drained`.
 
 The worker layer now includes `session_id` on per-download runner messages so a fresh session can safely ignore stale events from an older one:
 
@@ -55,6 +56,7 @@ pub(crate) enum RunnerMessage {
     Active { session_id: u64, download: Download },
     Inactive { session_id: u64, handle: String },
     Error { session_id: u64, error: String },
+    OutOfBandwidth { session_id: u64, error: String },
     Finished,
 }
 ```
@@ -94,6 +96,7 @@ while let Some(msg) = message_receiver.recv().await {
                 format_size(download.node.size)
             )),
             SessionEvent::Error(err) => pb.println(format!("Error: {err}")),
+            SessionEvent::OutOfBandwidth(err) => pb.println(format!("Bandwidth limit: {err}")),
             SessionEvent::Drained => break,
             SessionEvent::TransferTerminal(_) => {}
         }
