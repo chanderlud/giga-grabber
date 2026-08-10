@@ -1,5 +1,6 @@
 use crate::app::MONOSPACE;
-use crate::app::components::download_item;
+use crate::app::components::{download_item, metric_graph};
+use crate::app::screens::home_metrics::Metrics;
 use crate::{Download, app::styles};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Column, Row, button, container, scrollable, text};
@@ -11,6 +12,7 @@ pub(crate) struct Home {
     active_downloads: HashMap<String, Download>,
     errors: Vec<String>,
     bandwidth_counter: usize,
+    metrics: Metrics,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,7 @@ impl Home {
             active_downloads: HashMap::new(),
             errors: Vec::new(),
             bandwidth_counter: 0,
+            metrics: Metrics::new(),
         }
     }
 
@@ -58,6 +61,10 @@ impl Home {
 
     pub(crate) fn has_active_downloads(&self) -> bool {
         !self.active_downloads.is_empty()
+    }
+
+    pub(crate) fn sample_metrics(&mut self) {
+        self.metrics.sample(self.active_downloads.values());
     }
 
     #[allow(dead_code)]
@@ -117,6 +124,8 @@ impl Home {
     pub(crate) fn view(
         &self,
         display_preferences: download_item::DisplayPreferences,
+        show_bandwidth_graph: bool,
+        show_requests_graph: bool,
     ) -> Element<'_, Message> {
         let mut download_list = Column::new();
 
@@ -185,6 +194,28 @@ impl Home {
                         .height(Length::Fill),
                     ),
             )
+        }
+
+        if show_bandwidth_graph {
+            download_group = download_group.push(metric_graph::metric_graph(
+                "BANDWIDTH",
+                format!(
+                    "{:.2} MiB/s",
+                    self.metrics.bandwidth_samples().last().unwrap_or_default()
+                ),
+                self.metrics.bandwidth_samples().collect(),
+            ));
+        }
+
+        if show_requests_graph {
+            download_group = download_group.push(metric_graph::metric_graph(
+                "REQUESTS/S",
+                format!(
+                    "{:.0}",
+                    self.metrics.request_samples().last().unwrap_or_default()
+                ),
+                self.metrics.request_samples().collect(),
+            ));
         }
 
         let mut error_log = Column::new().push(scrollable(self.error_log()));

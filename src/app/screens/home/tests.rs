@@ -68,3 +68,29 @@ fn bulk_control_pauses_when_visible_downloads_are_mixed() {
         Message::PauseDownloads
     ));
 }
+
+#[test]
+fn metric_sampling_tracks_downloaded_bytes_and_requests_per_second() {
+    let file = MegaFile::new(
+        Node::test_file("metrics", "archive.iso", 4 * 1_024 * 1_024),
+        PathBuf::from("downloads"),
+    );
+    let download = Download::new(&file);
+    download.set_downloaded(1_048_576);
+    download.record_request();
+    download.record_request();
+    let mut home = Home::new();
+    home.add_active_download(download);
+
+    home.sample_metrics();
+    home.sample_metrics();
+
+    assert_eq!(
+        home.metrics.bandwidth_samples().collect::<Vec<_>>(),
+        [1.0, 0.0]
+    );
+    assert_eq!(
+        home.metrics.request_samples().collect::<Vec<_>>(),
+        [2.0, 0.0]
+    );
+}

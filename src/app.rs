@@ -139,7 +139,10 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Refresh => Task::none(),
+            Message::Refresh => {
+                self.home.sample_metrics();
+                Task::none()
+            }
             Message::Home(msg) => match self.home.update(msg) {
                 HomeAction::None => Task::none(),
                 HomeAction::StopWorkers => {
@@ -504,10 +507,14 @@ impl App {
         let content = match self.route {
             Route::Home => container(
                 self.home
-                    .view(components::download_item::DisplayPreferences {
-                        show_progress_bars: self.settings.config.show_progress_bars,
-                        show_download_sizes: self.settings.config.show_download_sizes,
-                    })
+                    .view(
+                        components::download_item::DisplayPreferences {
+                            show_progress_bars: self.settings.config.show_progress_bars,
+                            show_download_sizes: self.settings.config.show_download_sizes,
+                        },
+                        self.settings.config.show_bandwidth_graph,
+                        self.settings.config.show_requests_graph,
+                    )
                     .map(Message::Home),
             ),
             Route::Import => container(self.import.view().map(Message::Import)),

@@ -35,6 +35,7 @@ pub(crate) struct Download {
     pub(crate) stop: CancellationToken,
     pause_state: Arc<watch::Sender<PauseState>>,
     retries: Arc<AtomicU32>,
+    requests: Arc<AtomicUsize>,
     last_tried_at: Arc<Mutex<Option<Instant>>>,
 }
 
@@ -49,6 +50,7 @@ impl Download {
             stop: Default::default(),
             pause_state: Arc::new(pause_state),
             retries: Default::default(),
+            requests: Default::default(),
             last_tried_at: Default::default(),
         }
     }
@@ -128,6 +130,14 @@ impl Download {
 
     pub(crate) fn cancel(&self) {
         self.stop.cancel();
+    }
+
+    pub(crate) fn record_request(&self) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn request_count(&self) -> usize {
+        self.requests.load(Ordering::Relaxed)
     }
 
     pub(crate) fn pause(&self) {

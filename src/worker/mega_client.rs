@@ -148,7 +148,7 @@ impl MegaClient {
         download: &Download,
         dest_path: &Path,
     ) -> Result<bool> {
-        let (download_url, remote_size) = self.get_download_url(&download.node).await?;
+        let (download_url, remote_size) = self.get_download_url(download).await?;
 
         // figure out resume offset & open file accordingly
         let (mut file, resume_from, durable_len) = if dest_path.exists() {
@@ -207,6 +207,7 @@ impl MegaClient {
 
         let mut pause_receiver = download.pause_receiver();
 
+        download.record_request();
         let resp = select! {
             _ = pause_loop(&mut pause_receiver) => {
                 // Pause may have been resumed concurrently; only persist Paused
@@ -261,7 +262,8 @@ impl MegaClient {
     }
 
     /// Call the MEGA `g` (download) command and return the URL
-    async fn get_download_url(&self, node: &Node) -> Result<(String, u64)> {
+    async fn get_download_url(&self, download: &Download) -> Result<(String, u64)> {
+        let node = &download.node;
         let is_standalone_file = node.parent.is_none();
 
         let url = {
@@ -293,6 +295,7 @@ impl MegaClient {
 
         let body = vec![request];
 
+        download.record_request();
         let resp_bytes = self
             .http
             .post(url)

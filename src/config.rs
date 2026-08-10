@@ -73,6 +73,12 @@ pub(crate) struct Config {
     #[cfg(feature = "gui")]
     #[serde(default = "default_display_preference")]
     pub(crate) show_download_sizes: bool,
+    #[cfg(feature = "gui")]
+    #[serde(default)]
+    pub(crate) show_bandwidth_graph: bool,
+    #[cfg(feature = "gui")]
+    #[serde(default)]
+    pub(crate) show_requests_graph: bool,
     pub(crate) max_workers: usize,
     pub(crate) concurrency_budget: usize,
     pub(crate) max_retries: u32,
@@ -97,6 +103,10 @@ impl Default for Config {
             show_progress_bars: default_display_preference(),
             #[cfg(feature = "gui")]
             show_download_sizes: default_display_preference(),
+            #[cfg(feature = "gui")]
+            show_bandwidth_graph: false,
+            #[cfg(feature = "gui")]
+            show_requests_graph: false,
             max_workers: 10,
             concurrency_budget: 10,
             max_retries: 3,
@@ -368,6 +378,8 @@ mod tests {
 
         assert!(config.show_progress_bars);
         assert!(config.show_download_sizes);
+        assert!(!config.show_bandwidth_graph);
+        assert!(!config.show_requests_graph);
     }
 
     #[test]
@@ -376,11 +388,15 @@ mod tests {
         let fields = legacy_config.as_object_mut().unwrap();
         fields.remove("show_progress_bars");
         fields.remove("show_download_sizes");
+        fields.remove("show_bandwidth_graph");
+        fields.remove("show_requests_graph");
 
         let config: Config = serde_json::from_value(legacy_config).unwrap();
 
         assert!(config.show_progress_bars);
         assert!(config.show_download_sizes);
+        assert!(!config.show_bandwidth_graph);
+        assert!(!config.show_requests_graph);
     }
 
     #[test]
@@ -388,6 +404,8 @@ mod tests {
         let config = Config {
             show_progress_bars: false,
             show_download_sizes: false,
+            show_bandwidth_graph: true,
+            show_requests_graph: true,
             ..Config::default()
         };
 
@@ -395,5 +413,7 @@ mod tests {
 
         assert!(!config.show_progress_bars);
         assert!(!config.show_download_sizes);
+        assert!(config.show_bandwidth_graph);
+        assert!(config.show_requests_graph);
     }
 }

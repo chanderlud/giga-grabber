@@ -1,5 +1,6 @@
 pub(crate) mod choose_files;
 pub(crate) mod home;
+mod home_metrics;
 pub(crate) mod import;
 pub(crate) mod settings;
 

@@ -43,6 +43,8 @@ pub(crate) enum Message {
     PersistDownloadSessionsChanged(bool),
     ShowProgressBarsChanged(bool),
     ShowDownloadSizesChanged(bool),
+    ShowBandwidthGraphChanged(bool),
+    ShowRequestsGraphChanged(bool),
     CheckForUpdates,
 }
 
@@ -167,6 +169,14 @@ impl Settings {
             }
             Message::ShowDownloadSizesChanged(enabled) => {
                 self.config.show_download_sizes = enabled;
+                Action::None
+            }
+            Message::ShowBandwidthGraphChanged(enabled) => {
+                self.config.show_bandwidth_graph = enabled;
+                Action::None
+            }
+            Message::ShowRequestsGraphChanged(enabled) => {
+                self.config.show_requests_graph = enabled;
                 Action::None
             }
             Message::ProxyModeChanged(proxy_mode) => {
@@ -343,6 +353,16 @@ impl Settings {
                 "Show download sizes",
                 self.config.show_download_sizes,
                 Message::ShowDownloadSizesChanged,
+            ))
+            .push(self.settings_checkbox(
+                "Show bandwidth graph",
+                self.config.show_bandwidth_graph,
+                Message::ShowBandwidthGraphChanged,
+            ))
+            .push(self.settings_checkbox(
+                "Show requests / second graph",
+                self.config.show_requests_graph,
+                Message::ShowRequestsGraphChanged,
             ));
 
         container(
