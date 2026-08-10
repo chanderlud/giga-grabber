@@ -1,4 +1,5 @@
 use crate::Download;
+use crate::app::components::metric_graph::Graph;
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -41,6 +42,34 @@ impl Metrics {
 
     pub(super) fn request_samples(&self) -> impl Iterator<Item = f32> + '_ {
         self.request_samples.iter().copied()
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.bandwidth_samples.clear();
+        self.request_samples.clear();
+        self.last_downloaded = 0;
+        self.last_requests = 0;
+    }
+
+    pub(super) fn graphs(&self, show_bandwidth: bool, show_requests: bool) -> Vec<Graph> {
+        let mut graphs = Vec::new();
+        if show_bandwidth {
+            graphs.push(Graph {
+                label: "Bandwidth",
+                number: format!("{:.2}", self.bandwidth_samples().last().unwrap_or_default()),
+                unit: Some("MiB/s"),
+                samples: self.bandwidth_samples().collect(),
+            });
+        }
+        if show_requests {
+            graphs.push(Graph {
+                label: "Requests / second",
+                number: format!("{:.0}", self.request_samples().last().unwrap_or_default()),
+                unit: None,
+                samples: self.request_samples().collect(),
+            });
+        }
+        graphs
     }
 
     fn push(&mut self, bandwidth: f32, requests: f32) {

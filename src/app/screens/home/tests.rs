@@ -94,3 +94,22 @@ fn metric_sampling_tracks_downloaded_bytes_and_requests_per_second() {
         [2.0, 0.0]
     );
 }
+
+#[test]
+fn removing_the_final_download_clears_metric_history() {
+    let file = MegaFile::new(
+        Node::test_file("completed", "completed.iso", 1_024),
+        PathBuf::from("downloads"),
+    );
+    let download = Download::new(&file);
+    download.set_downloaded(1_024);
+    let handle = download.node.handle.clone();
+    let mut home = Home::new();
+    home.add_active_download(download);
+    home.sample_metrics();
+
+    home.remove_active_download(&handle);
+
+    assert!(home.metrics.bandwidth_samples().next().is_none());
+    assert!(home.metrics.request_samples().next().is_none());
+}

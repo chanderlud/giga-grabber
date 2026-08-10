@@ -1,22 +1,52 @@
 use crate::app::MONOSPACE;
-use iced::widget::{Column, canvas, text};
+use crate::app::styles;
+use iced::widget::{Column, Row, canvas, container, text};
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Theme, mouse};
 
 const GRAPH_HEIGHT: f32 = 72.0;
 const PADDING: f32 = 4.0;
 
-pub(crate) fn metric_graph<'a, Message: 'a>(
-    label: &'a str,
-    value: String,
-    samples: Vec<f32>,
+pub(crate) struct Graph {
+    pub(crate) label: &'static str,
+    pub(crate) number: String,
+    pub(crate) unit: Option<&'static str>,
+    pub(crate) samples: Vec<f32>,
+}
+
+pub(crate) fn graph_cards<'a, Message: 'a>(
+    graphs: impl IntoIterator<Item = Graph>,
 ) -> Element<'a, Message> {
+    graphs
+        .into_iter()
+        .fold(Row::new().spacing(5).width(Length::Fill), |row, graph| {
+            row.push(
+                container(metric_graph(graph))
+                    .style(styles::container::download_list_style())
+                    .padding(8)
+                    .width(Length::FillPortion(1)),
+            )
+        })
+        .into()
+}
+
+fn metric_graph<'a, Message: 'a>(graph: Graph) -> Element<'a, Message> {
+    let mut heading = Row::new()
+        .spacing(8)
+        .push(text(graph.label).size(14))
+        .push(text(graph.number).font(MONOSPACE).size(14));
+    if let Some(unit) = graph.unit {
+        heading = heading.push(text(unit).size(14));
+    }
+
     Column::new()
         .spacing(2)
-        .push(text(format!("{label}  {value}")).font(MONOSPACE).size(14))
+        .push(heading)
         .push(
-            canvas(MetricGraph { samples })
-                .width(Length::Fill)
-                .height(Length::Fixed(GRAPH_HEIGHT)),
+            canvas(MetricGraph {
+                samples: graph.samples,
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(GRAPH_HEIGHT)),
         )
         .into()
 }

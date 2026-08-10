@@ -48,6 +48,9 @@ impl Home {
     pub(crate) fn remove_active_download(&mut self, id: &str) -> Option<Download> {
         let download = self.active_downloads.remove(id)?;
         self.bandwidth_counter += download.downloaded.load(Relaxed);
+        if self.active_downloads.is_empty() {
+            self.metrics.reset();
+        }
         Some(download)
     }
 
@@ -78,6 +81,7 @@ impl Home {
                 for (_, download) in self.active_downloads.drain() {
                     download.cancel();
                 }
+                self.metrics.reset();
                 Action::StopWorkers
             }
             Message::CancelDownload(id) => {
@@ -196,26 +200,13 @@ impl Home {
             )
         }
 
-        if show_bandwidth_graph {
-            download_group = download_group.push(metric_graph::metric_graph(
-                "BANDWIDTH",
-                format!(
-                    "{:.2} MiB/s",
-                    self.metrics.bandwidth_samples().last().unwrap_or_default()
-                ),
-                self.metrics.bandwidth_samples().collect(),
-            ));
-        }
-
-        if show_requests_graph {
-            download_group = download_group.push(metric_graph::metric_graph(
-                "REQUESTS/S",
-                format!(
-                    "{:.0}",
-                    self.metrics.request_samples().last().unwrap_or_default()
-                ),
-                self.metrics.request_samples().collect(),
-            ));
+        if !self.active_downloads.is_empty() {
+            let graphs = self
+                .metrics
+                .graphs(show_bandwidth_graph, show_requests_graph);
+            if !graphs.is_empty() {
+                download_group = download_group.push(metric_graph::graph_cards(graphs));
+            }
         }
 
         let mut error_log = Column::new().push(scrollable(self.error_log()));
