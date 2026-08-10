@@ -512,8 +512,14 @@ impl App {
                             show_progress_bars: self.settings.config.show_progress_bars,
                             show_download_sizes: self.settings.config.show_download_sizes,
                         },
-                        self.settings.config.show_bandwidth_graph,
-                        self.settings.config.show_requests_graph,
+                        MetricsDisplay {
+                            show_bandwidth: self.settings.config.show_bandwidth_graph,
+                            show_requests: self.settings.config.show_requests_graph,
+                            has_live_transfers: self
+                                .session
+                                .as_ref()
+                                .is_some_and(TransferSession::has_live_transfers),
+                        },
                     )
                     .map(Message::Home),
             ),
@@ -601,6 +607,7 @@ impl App {
         }
 
         if drained {
+            self.home.reset_metrics();
             self.download_records.clear();
             self.remove_persisted_session();
             if let Some(session) = &mut self.session {

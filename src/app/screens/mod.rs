@@ -7,7 +7,7 @@ pub(crate) mod settings;
 pub(crate) use choose_files::{
     Action as ChooseFilesAction, ChooseFiles, Message as ChooseFilesMessage,
 };
-pub(crate) use home::{Action as HomeAction, Home, Message as HomeMessage};
+pub(crate) use home::{Action as HomeAction, Home, Message as HomeMessage, MetricsDisplay};
 pub(crate) use import::{Action as ImportAction, Import, Message as ImportMessage};
 pub(crate) use settings::{Action as SettingsAction, Message as SettingsMessage, Settings};
 

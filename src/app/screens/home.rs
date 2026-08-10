@@ -15,6 +15,13 @@ pub(crate) struct Home {
     metrics: Metrics,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct MetricsDisplay {
+    pub(crate) show_bandwidth: bool,
+    pub(crate) show_requests: bool,
+    pub(crate) has_live_transfers: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     CancelDownloads,
@@ -48,9 +55,7 @@ impl Home {
     pub(crate) fn remove_active_download(&mut self, id: &str) -> Option<Download> {
         let download = self.active_downloads.remove(id)?;
         self.bandwidth_counter += download.downloaded.load(Relaxed);
-        if self.active_downloads.is_empty() {
-            self.metrics.reset();
-        }
+        self.metrics.complete(&download);
         Some(download)
     }
 
@@ -68,6 +73,10 @@ impl Home {
 
     pub(crate) fn sample_metrics(&mut self) {
         self.metrics.sample(self.active_downloads.values());
+    }
+
+    pub(crate) fn reset_metrics(&mut self) {
+        self.metrics.reset();
     }
 
     #[allow(dead_code)]
@@ -128,8 +137,7 @@ impl Home {
     pub(crate) fn view(
         &self,
         display_preferences: download_item::DisplayPreferences,
-        show_bandwidth_graph: bool,
-        show_requests_graph: bool,
+        metrics_display: MetricsDisplay,
     ) -> Element<'_, Message> {
         let mut download_list = Column::new();
 
@@ -200,15 +208,6 @@ impl Home {
             )
         }
 
-        if !self.active_downloads.is_empty() {
-            let graphs = self
-                .metrics
-                .graphs(show_bandwidth_graph, show_requests_graph);
-            if !graphs.is_empty() {
-                download_group = download_group.push(metric_graph::graph_cards(graphs));
-            }
-        }
-
         let mut error_log = Column::new().push(scrollable(self.error_log()));
 
         if self.errors.is_empty() {
@@ -221,27 +220,35 @@ impl Home {
             )
         }
 
-        container(
-            Column::new()
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .spacing(5)
-                .push(
-                    container(download_group)
-                        .style(styles::container::download_list_style())
-                        .padding(2)
-                        .width(Length::Fill)
-                        .height(Length::FillPortion(2)),
-                )
-                .push(
-                    container(error_log)
-                        .style(styles::container::download_list_style())
-                        .padding(8)
-                        .width(Length::Fill)
-                        .height(Length::FillPortion(1)),
-                ),
-        )
-        .into()
+        let mut panels = Column::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .spacing(5)
+            .push(
+                container(download_group)
+                    .style(styles::container::download_list_style())
+                    .padding(2)
+                    .width(Length::Fill)
+                    .height(Length::FillPortion(2)),
+            );
+        if metrics_display.has_live_transfers {
+            let graphs = self.metrics.graphs(
+                metrics_display.show_bandwidth,
+                metrics_display.show_requests,
+            );
+            if !graphs.is_empty() {
+                panels = panels.push(metric_graph::graph_cards(graphs));
+            }
+        }
+        panels
+            .push(
+                container(error_log)
+                    .style(styles::container::download_list_style())
+                    .padding(8)
+                    .width(Length::Fill)
+                    .height(Length::FillPortion(1)),
+            )
+            .into()
     }
 
     fn error_log(&self) -> Element<'_, Message> {

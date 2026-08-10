@@ -8,6 +8,8 @@ pub(super) struct Metrics {
     request_samples: VecDeque<f32>,
     last_downloaded: usize,
     last_requests: usize,
+    completed_downloaded: usize,
+    completed_requests: usize,
 }
 
 impl Metrics {
@@ -17,16 +19,21 @@ impl Metrics {
             request_samples: VecDeque::new(),
             last_downloaded: 0,
             last_requests: 0,
+            completed_downloaded: 0,
+            completed_requests: 0,
         }
     }
 
     pub(super) fn sample<'a>(&mut self, downloads: impl Iterator<Item = &'a Download>) {
-        let (downloaded, requests) = downloads.fold((0, 0), |(downloaded, requests), download| {
-            (
-                downloaded + download.downloaded.load(Relaxed),
-                requests + download.request_count(),
-            )
-        });
+        let (downloaded, requests) = downloads.fold(
+            (self.completed_downloaded, self.completed_requests),
+            |(downloaded, requests), download| {
+                (
+                    downloaded + download.downloaded.load(Relaxed),
+                    requests + download.request_count(),
+                )
+            },
+        );
 
         self.push(
             downloaded.saturating_sub(self.last_downloaded) as f32 / 1_048_576.0,
@@ -49,6 +56,13 @@ impl Metrics {
         self.request_samples.clear();
         self.last_downloaded = 0;
         self.last_requests = 0;
+        self.completed_downloaded = 0;
+        self.completed_requests = 0;
+    }
+
+    pub(super) fn complete(&mut self, download: &Download) {
+        self.completed_downloaded += download.downloaded.load(Relaxed);
+        self.completed_requests += download.request_count();
     }
 
     pub(super) fn graphs(&self, show_bandwidth: bool, show_requests: bool) -> Vec<Graph> {

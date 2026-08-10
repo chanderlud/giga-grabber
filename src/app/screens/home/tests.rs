@@ -96,20 +96,49 @@ fn metric_sampling_tracks_downloaded_bytes_and_requests_per_second() {
 }
 
 #[test]
-fn removing_the_final_download_clears_metric_history() {
+fn completed_downloads_are_sampled_after_they_leave_the_active_list() {
     let file = MegaFile::new(
-        Node::test_file("completed", "completed.iso", 1_024),
+        Node::test_file("completed", "completed.iso", 1_024 * 1_024),
         PathBuf::from("downloads"),
     );
     let download = Download::new(&file);
-    download.set_downloaded(1_024);
+    download.set_downloaded(524_288);
     let handle = download.node.handle.clone();
     let mut home = Home::new();
     home.add_active_download(download);
-    home.sample_metrics();
 
     home.remove_active_download(&handle);
+    home.sample_metrics();
 
-    assert!(home.metrics.bandwidth_samples().next().is_none());
-    assert!(home.metrics.request_samples().next().is_none());
+    assert_eq!(home.metrics.bandwidth_samples().collect::<Vec<_>>(), [0.5]);
+    assert_eq!(home.metrics.request_samples().collect::<Vec<_>>(), [0.0]);
+}
+
+#[test]
+fn metric_history_spans_a_gap_between_queued_downloads() {
+    let first = MegaFile::new(
+        Node::test_file("first", "first.iso", 2 * 1_024 * 1_024),
+        PathBuf::from("downloads"),
+    );
+    let second = MegaFile::new(
+        Node::test_file("second", "second.iso", 3 * 1_024 * 1_024),
+        PathBuf::from("downloads"),
+    );
+    let first_download = Download::new(&first);
+    first_download.set_downloaded(1_048_576);
+    let first_handle = first_download.node.handle.clone();
+    let second_download = Download::new(&second);
+    second_download.set_downloaded(2 * 1_048_576);
+    let mut home = Home::new();
+    home.add_active_download(first_download);
+    home.sample_metrics();
+
+    home.remove_active_download(&first_handle);
+    home.add_active_download(second_download);
+    home.sample_metrics();
+
+    assert_eq!(
+        home.metrics.bandwidth_samples().collect::<Vec<_>>(),
+        [1.0, 2.0]
+    );
 }
