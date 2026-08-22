@@ -406,55 +406,42 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Settings(msg) => {
-                match self.settings.update(msg) {
-                    SettingsAction::None => Task::none(),
-                    SettingsAction::ConfigSaved => {
-                        self.persist_download_sessions =
-                            self.settings.config.persist_download_sessions;
-                        if !self.persist_download_sessions {
-                            self.remove_persisted_session();
-                        }
-                        Task::none()
+            Message::Settings(msg) => match self.settings.update(msg) {
+                SettingsAction::None => Task::none(),
+                SettingsAction::ConfigSaved => {
+                    self.persist_download_sessions = self.settings.config.persist_download_sessions;
+                    if !self.persist_download_sessions {
+                        self.remove_persisted_session();
                     }
-                    SettingsAction::CheckForUpdates => Self::check_for_updates(true),
-                    SettingsAction::RebuildRequired(config) => {
-                        // if the worker is active, do not rebuild
-                        if self
-                            .session
-                            .as_ref()
-                            .is_some_and(TransferSession::has_live_transfers)
+                    Task::none()
+                }
+                SettingsAction::CheckForUpdates => Self::check_for_updates(true),
+                SettingsAction::RebuildRequired(config) => match mega_builder(&config) {
+                    Ok(mega) => {
+                        if let Some(session) = &mut self.session
+                            && let Err(error) = session.update_config(config.clone())
                         {
-                            self.error_modal = Some(
-                                "Cannot apply these configuration changes while downloads are active"
-                                    .to_string(),
-                            );
+                            self.error_modal = Some(format!(
+                                "Failed to apply active download configuration: {error}"
+                            ));
                             return Task::none();
                         }
 
-                        // build a new mega client
-                        match mega_builder(&config) {
-                            Ok(mega) => {
-                                self.mega = mega; // set the new mega client
-                                self.settings = Settings::new(config.clone());
-                                self.settings.set_rebuild_available(false);
-                                Task::perform(async {}, |_| {
-                                    Message::Settings(SettingsMessage::SaveConfig)
-                                }) // save the config
-                            }
-                            Err(error) => {
-                                self.error_modal =
-                                    Some(format!("Failed to build mega client: {}", error));
-                                Task::none()
-                            }
-                        }
-                    }
-                    SettingsAction::ShowError(error) => {
-                        self.error_modal = Some(error);
+                        self.mega = mega;
+                        self.settings = Settings::new(config.clone());
+                        self.settings.set_rebuild_available(false);
                         Task::none()
                     }
+                    Err(error) => {
+                        self.error_modal = Some(format!("Failed to build mega client: {}", error));
+                        Task::none()
+                    }
+                },
+                SettingsAction::ShowError(error) => {
+                    self.error_modal = Some(error);
+                    Task::none()
                 }
-            }
+            },
             Message::ClearFiles => {
                 self.file_handles.clear(); // clear file handles tracking
                 self.choose_files = None;
