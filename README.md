@@ -65,6 +65,14 @@ gh attestation verify --owner chanderlud <filename-or-url>
 ## Contributing
 All contributions are welcome.
 
+## GUI
+
+### Downloads in progress
+![screenshot of downloads list](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/giga-grabber/cover.png)
+
+### Themes
+![screenshot of telepathy settings user interface](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/giga-grabber/themes.gif)
+
 ## Warnings
 - Using proxies or a VPN to bypass Mega's download limit is a violation of their [Terms of Service](https://mega.nz/terms).
 - Giga Grabber can use a massive amount of bandwidth. Carefully consider the options you use.
