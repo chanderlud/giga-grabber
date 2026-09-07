@@ -55,6 +55,14 @@ Options:
           Print version
 ```
 
+## GUI
+
+### Downloads in progress
+![screenshot of downloads list](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/giga-grabber/cover.png)
+
+### Themes
+![screenshot of telepathy settings user interface](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/giga-grabber/themes.gif)
+
 ## Verify Release Provenance
 Release binaries include GitHub Actions build provenance. After downloading a release asset, verify it with the GitHub CLI:
 
@@ -64,14 +72,6 @@ gh attestation verify --owner chanderlud <filename-or-url>
 
 ## Contributing
 All contributions are welcome.
-
-## GUI
-
-### Downloads in progress
-![screenshot of downloads list](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/giga-grabber/cover.png)
-
-### Themes
-![screenshot of telepathy settings user interface](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/giga-grabber/themes.gif)
 
 ## Warnings
 - Using proxies or a VPN to bypass Mega's download limit is a violation of their [Terms of Service](https://mega.nz/terms).
