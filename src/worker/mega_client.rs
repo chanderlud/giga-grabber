@@ -753,10 +753,7 @@ fn parse_public_link(url: &str) -> Result<ParsedPublicLink> {
 /// AES-ECB decrypt `data` in-place using `key`
 fn decrypt_ebc_in_place(key: &[u8; 16], data: &mut [u8]) {
     let aes = Aes128::new(key.into());
-    for block in data.chunks_exact_mut(16) {
-        let block: &mut [u8; 16] = block
-            .try_into()
-            .expect("chunks_exact_mut yields 16-byte blocks");
+    for block in data.as_chunks_mut::<16>().0 {
         aes.decrypt_block(block.into());
     }
 }
@@ -842,10 +839,7 @@ fn decrypt_attrs(aes_key: &[u8; 16], attr_b64: &str) -> Result<String> {
         .context("invalid base64 attrs")?;
 
     let mut cbc = Decryptor::<Aes128>::new(aes_key.into(), &Default::default());
-    for chunk in buf.chunks_exact_mut(16) {
-        let block: &mut [u8; 16] = chunk
-            .try_into()
-            .expect("chunks_exact_mut yields 16-byte blocks");
+    for block in buf.as_chunks_mut::<16>().0 {
         cbc.decrypt_block(block.into());
     }
 
@@ -887,10 +881,7 @@ mod tests {
 
     fn ecb_encrypt_in_place(key: &[u8; 16], data: &mut [u8]) {
         let aes = Aes128::new(key.into());
-        for block in data.chunks_exact_mut(16) {
-            let block: &mut [u8; 16] = block
-                .try_into()
-                .expect("chunks_exact_mut yields 16-byte blocks");
+        for block in data.as_chunks_mut::<16>().0 {
             aes.encrypt_block(block.into());
         }
     }
@@ -916,10 +907,7 @@ mod tests {
         plain.resize(plain.len() + pad, 0);
 
         let mut cbc = Encryptor::<Aes128>::new(aes_key.into(), &Default::default());
-        for chunk in plain.chunks_exact_mut(16) {
-            let block: &mut [u8; 16] = chunk
-                .try_into()
-                .expect("chunks_exact_mut yields 16-byte blocks");
+        for block in plain.as_chunks_mut::<16>().0 {
             cbc.encrypt_block(block.into());
         }
         URL_SAFE_NO_PAD.encode(plain)

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::Sender as TokioSender;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
@@ -23,7 +24,7 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 pub(crate) struct TransferSession<D: DownloadDriver> {
     id: u64,
     client: D,
-    config: Arc<Config>,
+    config: watch::Sender<Config>,
     runner_sender: Option<TokioSender<RunnerMessage>>,
     download_sender: kanal::Sender<Download>,
     download_receiver: kanal::AsyncReceiver<Download>,
@@ -39,7 +40,7 @@ impl<D: DownloadDriver> TransferSession<D> {
         Self {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             client,
-            config: Arc::new(config),
+            config: watch::channel(config).0,
             runner_sender: None,
             download_sender,
             download_receiver: download_receiver.to_async(),
@@ -53,6 +54,18 @@ impl<D: DownloadDriver> TransferSession<D> {
         self.runner_sender = Some(runner_sender);
     }
 
+    pub(crate) fn update_config(&mut self, config: Config) -> anyhow::Result<()> {
+        let previous_workers = self.config.borrow().max_workers_bounded();
+        let workers = config.max_workers_bounded();
+        self.config.send_replace(config);
+
+        if workers > previous_workers && self.worker.is_some() {
+            self.start_workers(workers - previous_workers)?;
+        }
+
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn contains_transfer(&self, handle: &str) -> bool {
         self.transfers.contains_key(handle)
@@ -62,6 +75,7 @@ impl<D: DownloadDriver> TransferSession<D> {
         self.transfers.keys().cloned().collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn has_live_transfers(&self) -> bool {
         !self.transfers.is_empty()
     }
@@ -111,7 +125,8 @@ impl<D: DownloadDriver> TransferSession<D> {
         }
 
         if added > 0 && self.worker.is_none() {
-            self.start_workers()?;
+            let workers = self.config.borrow().max_workers_bounded();
+            self.start_workers(workers)?;
         }
 
         Ok(added)
@@ -182,25 +197,31 @@ impl<D: DownloadDriver> TransferSession<D> {
         }
     }
 
-    fn start_workers(&mut self) -> anyhow::Result<()> {
+    fn start_workers(&mut self, workers: usize) -> anyhow::Result<()> {
         let runner_sender = self
             .runner_sender
             .clone()
             .context("runner sender not available")?;
-        let cancel = CancellationToken::new();
+        let cancel = self
+            .worker
+            .as_ref()
+            .map(|state| state.cancel.clone())
+            .unwrap_or_default();
+        let handles = spawn_workers(
+            self.client.clone(),
+            Arc::new(self.config.borrow().clone()),
+            self.download_receiver.clone(),
+            self.download_sender.clone_async(),
+            (runner_sender, self.id),
+            cancel.clone(),
+            workers,
+        );
 
-        self.worker = Some(WorkerState {
-            handles: spawn_workers(
-                self.client.clone(),
-                self.config.clone(),
-                self.download_receiver.clone(),
-                self.download_sender.clone_async(),
-                (runner_sender, self.id),
-                cancel.clone(),
-                self.config.max_workers_bounded(),
-            ),
-            cancel,
-        });
+        if let Some(state) = &mut self.worker {
+            state.handles.extend(handles);
+        } else {
+            self.worker = Some(WorkerState { handles, cancel });
+        }
 
         Ok(())
     }
@@ -529,7 +550,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_session_config_is_snapshotted_at_creation() {
+    async fn test_session_uses_live_config_updates_for_active_transfers() {
         let temp = TempDir::new().expect("temp dir");
         let first = make_download("snapshot-first.bin", 1024, temp.path().to_path_buf());
         let second = make_download("snapshot-second.bin", 1024, temp.path().to_path_buf());
@@ -543,11 +564,8 @@ mod tests {
         let mut session = TransferSession::new(driver.clone(), config.clone());
         session.set_runner_sender(runner_sender);
 
-        let mut mutated = config;
-        mutated.max_workers = 9;
-
         session
-            .add_downloads(vec![first.clone(), second.clone()])
+            .add_downloads(vec![first.clone()])
             .expect("queue downloads");
 
         let events = session.handle_runner_message(next_message(&mut runner_receiver).await);
@@ -557,16 +575,17 @@ mod tests {
         ));
         wait_for_driver_calls(&driver, 1).await;
         assert_eq!(session.active_count(), 1);
-        assert_eq!(session.pending_count(), 1);
+        assert_eq!(session.pending_count(), 0);
 
-        timeout(
-            Duration::from_millis(200),
-            next_message(&mut runner_receiver),
-        )
-        .await
-        .expect_err("second download should not start while max_workers stays snapshotted at 1");
-
-        first.stop.cancel();
+        session
+            .update_config(Config {
+                max_workers: 2,
+                ..config
+            })
+            .expect("apply updated configuration");
+        session
+            .add_downloads(vec![second.clone()])
+            .expect("queue second download after applying configuration");
 
         timeout(Duration::from_secs(3), async {
             loop {
@@ -582,7 +601,8 @@ mod tests {
         .await
         .expect("second download never became active");
 
+        second.stop.cancel();
+        first.stop.cancel();
         session.finish().await;
-        assert_eq!(mutated.max_workers, 9);
     }
 }
